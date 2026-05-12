@@ -195,6 +195,9 @@
     .profile-form input { width: 100%; margin: 6px 0; padding: 8px; border-radius: 12px; border: 1px solid #ddd; }
     .profile-form button { width: 100%; margin-top: 8px; padding: 10px; border-radius: 12px; border: none; background: #0091ff; color: #fff; cursor: pointer; }
     .status-label { display: block; margin-top: 6px; font-size: 11px; color: #666; }
+    .last-seen { font-size: 11px; color: #888; margin-top: 4px; }
+    .user-status-message { font-size: 12px; color: #666; font-style: italic; margin-top: 4px; }
+    .status-input { width: 100%; padding: 8px; border-radius: 8px; border: 1px solid #ddd; font-size: 12px; margin-top: 8px; }
     .panel-box { padding: 15px 20px; background: #f7fbff; border-bottom: 1px solid #e6ebf2; }
     .panel-box input { width: 100%; padding: 10px; border-radius: 14px; border: 1px solid #ddd; margin-bottom: 10px; }
     .panel-box button { background: #0091ff; color: #fff; border: none; border-radius: 14px; padding: 10px; cursor: pointer; }
@@ -256,6 +259,45 @@
         resize: vertical;
         min-height: 100px;
         font-family: inherit;
+    }
+    .forward-modal {
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background: rgba(0,0,0,0.5);
+        display: none;
+        justify-content: center;
+        align-items: center;
+        z-index: 1000;
+    }
+    .forward-modal-content {
+        background: white;
+        padding: 20px;
+        border-radius: 12px;
+        width: 90%;
+        max-width: 500px;
+        box-shadow: 0 4px 20px rgba(0,0,0,0.2);
+    }
+    .forward-modal select {
+        width: 100%;
+        padding: 10px;
+        border: 1px solid #ddd;
+        border-radius: 8px;
+        margin: 10px 0;
+        font-family: inherit;
+    }
+    .forward-modal textarea {
+        width: 100%;
+        padding: 10px;
+        border: 1px solid #ddd;
+        border-radius: 8px;
+        resize: vertical;
+        min-height: 60px;
+        font-family: inherit;
+        background: #f5f5f5;
+        margin: 10px 0;
     }
     .edit-modal-buttons {
         display: flex;
@@ -1242,6 +1284,8 @@
                 <div>
                     <div style="font-weight:bold; color:#333;">{{ profile.full_name }}</div>
                     <div style="font-size:12px; color:#666;">@{{ profile.username }}</div>
+                    <div id="user-status-display" class="user-status-message"></div>
+                    <div id="last-seen-display" class="last-seen"></div>
                 </div>
             </div>
             <form class="profile-form" method="POST" action="/update_profile" enctype="multipart/form-data" style="padding: 0 20px 15px;">
@@ -1251,6 +1295,17 @@
                     <label style="font-size:12px; color:#666; display:block; margin-bottom:5px;">Avatar:</label>
                     <input type="file" name="avatar" accept="image" style="width:100%; padding:8px; border:1px solid #ddd; border-radius:8px; font-size:12px;">
                 </div>
+                <div style="margin: 10px 0;">
+                    <label style="font-size:12px; color:#666; display:block; margin-bottom:5px;">Status message:</label>
+                    <input type="text" id="status-message-input" class="status-input" placeholder="Nhập status của bạn..." maxlength="200">
+                    <button type="button" onclick="setUserStatusMessage()" style="width:100%; margin-top:5px; padding:8px; border-radius:8px; border:none; background:#0091ff; color:#fff; cursor:pointer;">Cập nhật status</button>
+                </div>
+                <div style="margin: 10px 0;">
+                    <label style="font-size:12px; color:#666; display:block; margin-bottom:5px; cursor:pointer;">
+                        <input type="checkbox" id="email-notification-checkbox" onchange="toggleEmailNotifications()" style="margin-right:8px;">
+                        Nhận thông báo qua email
+                    </label>
+                </div>
                 <button type="submit">Cập nhật profile</button>
             </form>
         </div>
@@ -1259,6 +1314,22 @@
             <input id="group-name-input" type="text" placeholder="Nhập tên nhóm" />
             <button type="button" onclick="submitCreateGroup()">Tạo nhóm</button>
             <button type="button" onclick="toggleCreateGroup(false)" style="margin-top:10px; width:100%; background:#aaa;">Hủy</button>
+        </div>
+        
+        <!-- Forward Modal -->
+        <div id="forward-modal" class="forward-modal">
+            <div class="forward-modal-content">
+                <div style="font-weight:bold; margin-bottom:15px; font-size:18px;">Forward tin nhắn</div>
+                <textarea id="forward-message-preview" readonly></textarea>
+                <label style="font-size:12px; color:#666; display:block; margin-bottom:5px;">Chọn phòng:</label>
+                <select id="forward-room-select">
+                    <option value="">-- Chọn phòng --</option>
+                </select>
+                <div class="edit-modal-buttons">
+                    <button type="button" onclick="closeForwardModal()" style="padding:8px 16px; border-radius:8px; border:none; background:#aaa; color:#fff; cursor:pointer;">Hủy</button>
+                    <button type="button" onclick="submitForward()" style="padding:8px 16px; border-radius:8px; border:none; background:#0091ff; color:#fff; cursor:pointer;">Forward</button>
+                </div>
+            </div>
         </div>
             <!-- THANH TÌM KIẾM MỚI -->
             <div class="search-container" style="position: relative; padding: 10px;">
@@ -1504,6 +1575,148 @@
         function toggleProfile() {
             var panel = document.getElementById('profile-panel');
             panel.classList.toggle('hidden');
+            
+            // Load user status message and last seen when opening profile
+            if (!panel.classList.contains('hidden')) {
+                loadUserStatusMessage();
+                loadLastSeen();
+            }
+        }
+
+        function loadUserStatusMessage() {
+            if ('user_id' in session) {
+                fetch('/get_user_status_message/' + session['user_id'])
+                    .then(function(response) { return response.json(); })
+                    .then(function(data) {
+                        if (data.success && data.status_message) {
+                            document.getElementById('user-status-display').textContent = '"' + data.status_message + '"';
+                            document.getElementById('status-message-input').value = data.status_message;
+                        }
+                    });
+            }
+        }
+
+        function setUserStatusMessage() {
+            var statusMessage = document.getElementById('status-message-input').value.trim();
+            fetch('/set_user_status_message', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ status_message: statusMessage })
+            })
+            .then(function(response) { return response.json(); })
+            .then(function(data) {
+                if (data.success) {
+                    document.getElementById('user-status-display').textContent = '"' + statusMessage + '"';
+                    alert('Đã cập nhật status message!');
+                } else {
+                    alert(data.message);
+                }
+            });
+        }
+
+        function loadLastSeen() {
+            if ('user_id' in session) {
+                fetch('/get_last_seen/' + session['user_id'])
+                    .then(function(response) { return response.json(); })
+                    .then(function(data) {
+                        if (data.success && data.last_seen) {
+                            document.getElementById('last-seen-display').textContent = 'Last seen: ' + data.last_seen;
+                        }
+                    });
+            }
+        }
+
+        function loadEmailNotificationStatus() {
+            fetch('/get_email_notification_status')
+                .then(function(response) { return response.json(); })
+                .then(function(data) {
+                    if (data.success) {
+                        var checkbox = document.getElementById('email-notification-checkbox');
+                        if (checkbox) {
+                            checkbox.checked = data.enabled;
+                        }
+                    }
+                });
+        }
+
+        function toggleEmailNotifications() {
+            var checkbox = document.getElementById('email-notification-checkbox');
+            var enabled = checkbox.checked;
+            
+            fetch('/enable_email_notifications', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ enabled: enabled })
+            })
+            .then(function(response) { return response.json(); })
+            .then(function(data) {
+                if (data.success) {
+                    console.log('Email notification updated');
+                } else {
+                    alert(data.message);
+                    checkbox.checked = !enabled;  // Revert if failed
+                }
+            });
+        }
+
+        var currentForwardMessageId = null;
+
+        function openForwardModal(messageId, messageContent) {
+            currentForwardMessageId = messageId;
+            document.getElementById('forward-message-preview').value = messageContent;
+            
+            // Load user's rooms
+            var roomSelect = document.getElementById('forward-room-select');
+            roomSelect.innerHTML = '<option value="">-- Chọn phòng --</option>';
+            
+            // Add group rooms
+            {% for room in rooms %}
+            roomSelect.innerHTML += '<option value="{{ room.room_id }}">{{ room.room_name }}</option>';
+            {% endfor %}
+            
+            // Add private rooms
+            {% for room in private_rooms %}
+            roomSelect.innerHTML += '<option value="{{ room.room_id }}">{{ room.room_name }}</option>';
+            {% endfor %}
+            
+            document.getElementById('forward-modal').style.display = 'flex';
+        }
+
+        function closeForwardModal() {
+            document.getElementById('forward-modal').style.display = 'none';
+            currentForwardMessageId = null;
+        }
+
+        function submitForward() {
+            var targetRoomId = document.getElementById('forward-room-select').value;
+            
+            if (!targetRoomId) {
+                alert('Vui lòng chọn phòng để forward');
+                return;
+            }
+            
+            if (!currentForwardMessageId) {
+                alert('Lỗi: Không có tin nhắn để forward');
+                return;
+            }
+            
+            fetch('/forward_message', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    message_id: currentForwardMessageId,
+                    target_room_id: targetRoomId
+                })
+            })
+            .then(function(response) { return response.json(); })
+            .then(function(data) {
+                if (data.success) {
+                    alert('Đã forward tin nhắn thành công!');
+                    closeForwardModal();
+                } else {
+                    alert(data.message);
+                }
+            });
         }
 
         function toggleTheme() {
@@ -1566,6 +1779,9 @@
                         <button class="msg-action-btn" onclick="pinMessage('${data.message_id || ''}')">
                             <i class="fas fa-thumbtack"></i>
                         </button>
+                        <button class="msg-action-btn" onclick="openForwardModal('${data.message_id || ''}', '${(data.msg || data.content || '').replace(/'/g, "\\'")}')">
+                            <i class="fas fa-share"></i>
+                        </button>
                         <button class="msg-action-btn" onclick="deleteMessage('${data.message_id || ''}')">
                             <i class="fas fa-trash"></i>
                         </button>
@@ -1579,6 +1795,9 @@
                         </button>
                         <button class="msg-action-btn" onclick="pinMessage('${data.message_id || ''}')">
                             <i class="fas fa-thumbtack"></i>
+                        </button>
+                        <button class="msg-action-btn" onclick="openForwardModal('${data.message_id || ''}', '${(data.msg || data.content || '').replace(/'/g, "\\'")}')">
+                            <i class="fas fa-share"></i>
                         </button>
                     </div>
                 `;
@@ -3445,11 +3664,9 @@
             loadTheme();
             loadSoundPreference();
             loadMutedRooms();
+            loadEmailNotificationStatus();
             var msgBox = document.getElementById('messages');
             msgBox.scrollTop = msgBox.scrollHeight;
-            userRooms.forEach(function(roomId) {
-                socket.emit('join', { room: roomId, user: current_user });
-            });
         };
     </script>
 </body>

@@ -10,52 +10,51 @@ from werkzeug.security import generate_password_hash
 from logger_config import app_logger
 
 class Config:
-    """Configuration class"""
     def __init__(self):
+        # Ưu tiên lấy link PostgreSQL từ Render
+        self.database_url = os.environ.get('DATABASE_URL')
+        
+        # Thông số dự phòng cho SQL Server (máy nhà)
         self.db_driver = os.environ.get('DB_DRIVER', 'ODBC Driver 17 for SQL Server')
         self.db_server = os.environ.get('DB_SERVER', 'IAMIOT')
         self.db_name = os.environ.get('DB_NAME', 'DNU_ChatApp')
         self.db_trusted = os.environ.get('DB_TRUSTED_CONNECTION', 'true').lower() in ['true', '1', 'yes']
         self.db_user = os.environ.get('DB_USER', '')
         self.db_password = os.environ.get('DB_PASSWORD', '')
-        
-        # Build connection string
+
         self.conn_str = f"DRIVER={{{self.db_driver}}};SERVER={self.db_server};DATABASE={self.db_name};"
-        
         if self.db_trusted:
             self.conn_str += "Trusted_Connection=yes;"
         else:
             self.conn_str += f"UID={self.db_user};PWD={self.db_password};"
-        
         self.conn_str += "Encrypt=yes;TrustServerCertificate=yes;"
 
 config = Config()
-conn_str = config.conn_str
 
 class DatabaseManager:
-    """Database management class"""
-    
     @staticmethod
     def get_db_connection():
-        """Get database connection"""
         try:
-            conn = pyodbc.connect(conn_str)
-            return conn
+            # Nếu có DATABASE_URL -> Dùng PostgreSQL (Render)
+            if config.database_url:
+                return psycopg2.connect(config.database_url)
+            # Nếu không -> Dùng SQL Server (Máy nhà)
+            return pyodbc.connect(config.conn_str)
         except Exception as e:
             app_logger.error(f"Database connection error: {e}")
             raise
-    
+
     @staticmethod
     def execute_query(query, params=None, fetch_one=False, fetch_all=False):
-        """Execute database query"""
         try:
             conn = DatabaseManager.get_db_connection()
+            # PostgreSQL dùng %s thay vì ?, ta cần xử lý nếu đang ở Render
+            if config.database_url:
+                query = query.replace('?', '%s').replace('GETDATE()', 'CURRENT_TIMESTAMP')
+                query = query.replace('SCOPE_IDENTITY()', 'LASTVAL()') # PostgreSQL tương đương
+
             cursor = conn.cursor()
-            
-            if params:
-                cursor.execute(query, params)
-            else:
-                cursor.execute(query)
+            cursor.execute(query, params) if params else cursor.execute(query)
             
             result = None
             if fetch_one:
@@ -1236,34 +1235,498 @@ class DatabaseManager:
         except Exception as e:
             app_logger.error(f"User exists error: {e}")
             return False
-    
+
+@staticmethod
+def create_notification(user_id, title, message, notification_type):
+    """Create a notification"""
+    try:
+        DatabaseManager.ensure_notifications_table()
+        query = """
+            INSERT INTO Notifications (UserID, Title, Message, Type)
+            VALUES (?, ?, ?, ?)
+        """
+        DatabaseManager.execute_query(query, (user_id, title, message, notification_type))
+        return True
+    except Exception as e:
+        app_logger.error(f"Create notification error: {e}")
+        return False
+
+@staticmethod
+def get_user_notifications(user_id):
+    """Get notifications for a user"""
+    try:
+        query = """
+            SELECT NotificationID, Title, Message, Type, IsRead, CreatedAt
+            FROM Notifications
+            WHERE UserID = ?
+            ORDER BY CreatedAt DESC
+        """
+        notifications = DatabaseManager.execute_query(query, (user_id,), fetch_all=True)
+        return [{
+            'notification_id': notif[0],
+            'title': notif[1],
+            'message': notif[2],
+            'type': notif[3],
+            'is_read': bool(notif[4]),
+            'created_at': notif[5].strftime('%Y-%m-%d %H:%M:%S') if notif[5] else ''
+        } for notif in notifications]
+    except Exception as e:
+        app_logger.error(f"Get user notifications error: {e}")
+        return []
+
+@staticmethod
+def mark_notification_read(notification_id, user_id):
+    """Mark notification as read"""
+    try:
+        query = """
+            UPDATE Notifications
+            SET IsRead = 1
+            WHERE NotificationID = ? AND UserID = ?
+        """
+        DatabaseManager.execute_query(query, (notification_id, user_id))
+        return True
+    except Exception as e:
+        app_logger.error(f"Mark notification read error: {e}")
+        return False
+
+@staticmethod
+def is_room_admin(room_id, user_id):
+    """Check if user is admin of a room"""
+    try:
+        # Prefer role stored in RoomRoles (newer table)
+        DatabaseManager.ensure_room_roles_table()
+        rr_query = "SELECT Role FROM RoomRoles WHERE RoomID = ? AND UserID = ?"
+        rr = DatabaseManager.execute_query(rr_query, (room_id, user_id), fetch_one=True)
+        if rr and rr[0] == 'Admin':
+            return True
+
+        # Fallback: check RoomParticipants.Role column for backward compatibility
+        query = """
+            SELECT COUNT(*) as IsAdmin
+            FROM RoomParticipants
+            WHERE RoomID = ? AND UserID = ? AND Role = 'Admin'
+        """
+        result = DatabaseManager.execute_query(query, (room_id, user_id), fetch_one=True)
+        return result[0] > 0 if result else False
+    except Exception as e:
+        app_logger.error(f"Is room admin error: {e}")
+        return False
+
+@staticmethod
+def user_exists(user_id):
+    """Check if user exists"""
+    try:
+        query = "SELECT COUNT(*) FROM Users WHERE UserID = ?"
+        result = DatabaseManager.execute_query(query, (user_id,), fetch_one=True)
+        return result[0] > 0 if result else False
+    except Exception as e:
+        app_logger.error(f"User exists error: {e}")
+        return False
+
+@staticmethod
+def save_message(user_id, content, msg_type='Text', room_id=1, reply_to_message_id=None):
+    """Lưu tin nhắn vào database"""
+    try:
+        query = """
+            INSERT INTO Messages (SenderID, Content, MessageType, RoomID, ReplyToMessageID, SentAt, IsRead)
+            VALUES (?, ?, ?, ?, ?, GETDATE(), 0)
+        """
+        DatabaseManager.execute_query(query, (user_id, content, msg_type, room_id, reply_to_message_id))
+        return True
+    except Exception as e:
+        app_logger.error(f"Save message error: {e}")
+        return False
+
+@staticmethod
+def save_forwarded_message(user_id, original_message_id, target_room_id):
+    """Lưu forwarded message vào database"""
+    try:
+        # Get original message
+        original_query = """
+            SELECT Content, MessageType, SenderID
+            FROM Messages
+            WHERE MessageID = ?
+        """
+        original = DatabaseManager.execute_query(original_query, (original_message_id,), fetch_one=True)
+        
+        if not original:
+            return False
+        
+        content = original[0]
+        msg_type = original[1]
+        original_sender_id = original[2]
+        
+        # Check if ForwardedFromMessageID column exists
+        if not DatabaseManager.column_exists('Messages', 'ForwardedFromMessageID'):
+            query = "ALTER TABLE Messages ADD ForwardedFromMessageID INT NULL"
+            DatabaseManager.execute_query(query)
+        
+        # Insert forwarded message
+        query = """
+            INSERT INTO Messages (SenderID, Content, MessageType, RoomID, ForwardedFromMessageID, SentAt, IsRead)
+            VALUES (?, ?, ?, ?, ?, GETDATE(), 0)
+        """
+        DatabaseManager.execute_query(query, (user_id, content, msg_type, target_room_id, original_message_id))
+        return True
+    except Exception as e:
+        app_logger.error(f"Save forwarded message error: {e}")
+        return False
+
     @staticmethod
-    def add_member_to_group(room_id, user_id):
-        """Add member to group"""
+    def update_email_notification_enabled(user_id, enabled):
+        """Cập nhật trạng thái email notification của user"""
         try:
-            query = """
-                INSERT INTO RoomParticipants (RoomID, UserID, Role, JoinedAt)
-                VALUES (?, ?, 'Member', GETDATE())
-            """
-            DatabaseManager.execute_query(query, (room_id, user_id))
+            # Check if EmailNotificationEnabled column exists
+            if not DatabaseManager.column_exists('Users', 'EmailNotificationEnabled'):
+                query = "ALTER TABLE Users ADD EmailNotificationEnabled BIT DEFAULT 0"
+                DatabaseManager.execute_query(query)
+            
+            query = "UPDATE Users SET EmailNotificationEnabled = ? WHERE UserID = ?"
+            DatabaseManager.execute_query(query, (1 if enabled else 0, user_id))
             return True
         except Exception as e:
-            app_logger.error(f"Add member to group error: {e}")
+            app_logger.error(f"Update email notification enabled error: {e}")
             return False
-    
+
     @staticmethod
-    def remove_member_from_group(room_id, user_id):
-        """Remove member from group"""
+    def get_email_notification_enabled(user_id):
+        """Lấy trạng thái email notification của user"""
+        try:
+            # Check if column exists
+            if not DatabaseManager.column_exists('Users', 'EmailNotificationEnabled'):
+                return False
+            
+            query = "SELECT EmailNotificationEnabled FROM Users WHERE UserID = ?"
+            result = DatabaseManager.execute_query(query, (user_id,), fetch_one=True)
+            return bool(result[0]) if result and result[0] is not None else False
+        except Exception as e:
+            app_logger.error(f"Get email notification enabled error: {e}")
+            return False
+
+    @staticmethod
+    def get_users_with_email_notification_enabled(room_id):
+        """Lấy danh sách users trong phòng có bật email notification"""
         try:
             query = """
-                DELETE FROM RoomParticipants
-                WHERE RoomID = ? AND UserID = ?
+                SELECT u.UserID, u.Email, u.FullName
+                FROM Users u
+                JOIN RoomParticipants rp ON u.UserID = rp.UserID
+                WHERE rp.RoomID = ? 
+                AND u.Email IS NOT NULL 
+                AND u.Email != ''
+                AND u.EmailNotificationEnabled = 1
             """
-            DatabaseManager.execute_query(query, (room_id, user_id))
+            users = DatabaseManager.execute_query(query, (room_id,), fetch_all=True)
+            return [{
+                'user_id': user[0],
+                'email': user[1],
+                'full_name': user[2]
+            } for user in users]
+        except Exception as e:
+            app_logger.error(f"Get users with email notification enabled error: {e}")
+            return []
+
+@staticmethod
+def remove_member_from_group(room_id, user_id):
+    """Remove member from group"""
+    try:
+        query = """
+            DELETE FROM RoomParticipants
+            WHERE RoomID = ? AND UserID = ?
+        """
+        DatabaseManager.execute_query(query, (room_id, user_id))
+        return True
+    except Exception as e:
+        app_logger.error(f"Remove member from group error: {e}")
+        return False
+
+@staticmethod
+def update_group_info(room_id, room_name, description=None):
+    """Update group information"""
+    try:
+        # Ensure Rooms table has necessary columns
+        if not DatabaseManager.column_exists('Rooms', 'Description'):
+            DatabaseManager.execute_query("ALTER TABLE Rooms ADD Description NVARCHAR(500) NULL")
+        
+        if not DatabaseManager.column_exists('Rooms', 'AvatarUrl'):
+            DatabaseManager.execute_query("ALTER TABLE Rooms ADD AvatarUrl NVARCHAR(500) NULL")
+        
+        query = """
+            UPDATE Rooms
+            SET RoomName = ?, Description = ?
+            WHERE RoomID = ?
+        """
+        DatabaseManager.execute_query(query, (room_name, description, room_id))
+        return True
+    except Exception as e:
+        app_logger.error(f"Update group info error: {e}")
+        return False
+
+    @staticmethod
+    def create_group_invite(room_id, inviter_id, invitee_id):
+        """Tạo group invite"""
+        try:
+            # Check if GroupInvites table exists
+            if not DatabaseManager.table_exists('GroupInvites'):
+                query = """
+                    CREATE TABLE GroupInvites (
+                        InviteID INT IDENTITY(1,1) PRIMARY KEY,
+                        RoomID INT NOT NULL,
+                        InviterID INT NOT NULL,
+                        InviteeID INT NOT NULL,
+                        Status NVARCHAR(50) DEFAULT 'Pending',
+                        CreatedAt DATETIME DEFAULT GETDATE(),
+                        FOREIGN KEY (RoomID) REFERENCES Rooms(RoomID),
+                        FOREIGN KEY (InviterID) REFERENCES Users(UserID),
+                        FOREIGN KEY (InviteeID) REFERENCES Users(UserID)
+                    )
+                """
+                DatabaseManager.execute_query(query)
+            
+            # Check if invite already exists
+            check_query = """
+                SELECT InviteID FROM GroupInvites 
+                WHERE RoomID = ? AND InviteeID = ? AND Status = 'Pending'
+            """
+            existing = DatabaseManager.execute_query(check_query, (room_id, invitee_id), fetch_one=True)
+            if existing:
+                return False  # Invite already exists
+            
+            # Create invite
+            query = """
+                INSERT INTO GroupInvites (RoomID, InviterID, InviteeID, Status, CreatedAt)
+                VALUES (?, ?, ?, 'Pending', GETDATE())
+            """
+            DatabaseManager.execute_query(query, (room_id, inviter_id, invitee_id))
             return True
         except Exception as e:
-            app_logger.error(f"Remove member from group error: {e}")
+            app_logger.error(f"Create group invite error: {e}")
             return False
+
+    @staticmethod
+    def get_pending_invites(user_id):
+        """Lấy danh sách pending invites của user"""
+        try:
+            query = """
+                SELECT gi.InviteID, gi.RoomID, gi.InviterID, gi.CreatedAt,
+                       r.RoomName, r.AvatarUrl, u.FullName as InviterName
+                FROM GroupInvites gi
+                JOIN Rooms r ON gi.RoomID = r.RoomID
+                JOIN Users u ON gi.InviterID = u.UserID
+                WHERE gi.InviteeID = ? AND gi.Status = 'Pending'
+                ORDER BY gi.CreatedAt DESC
+            """
+            invites = DatabaseManager.execute_query(query, (user_id,), fetch_all=True)
+            return [{
+                'invite_id': invite[0],
+                'room_id': invite[1],
+                'inviter_id': invite[2],
+                'created_at': invite[3],
+                'room_name': invite[4],
+                'room_avatar': invite[5],
+                'inviter_name': invite[6]
+            } for invite in invites]
+        except Exception as e:
+            app_logger.error(f"Get pending invites error: {e}")
+            return []
+
+    @staticmethod
+    def accept_decline_invite(invite_id, user_id, action):
+        """Chấp nhận hoặc từ chối group invite"""
+        try:
+            # Get invite info
+            query = """
+                SELECT RoomID, InviteeID FROM GroupInvites 
+                WHERE InviteID = ? AND InviteeID = ? AND Status = 'Pending'
+            """
+            invite = DatabaseManager.execute_query(query, (invite_id, user_id), fetch_one=True)
+            
+            if not invite:
+                return False
+            
+            room_id = invite[0]
+            
+            if action == 'accept':
+                # Add user to group
+                DatabaseManager.add_member_to_group(room_id, user_id)
+            
+            # Update invite status
+            update_query = """
+                UPDATE GroupInvites 
+                SET Status = ? 
+                WHERE InviteID = ?
+            """
+            DatabaseManager.execute_query(update_query, ('Accepted' if action == 'accept' else 'Declined', invite_id))
+            return True
+        except Exception as e:
+            app_logger.error(f"Accept/decline invite error: {e}")
+            return False
+
+@staticmethod
+def is_room_member(room_id, user_id):
+    """Check if user is member of a room"""
+    try:
+        query = """
+            SELECT COUNT(*) as IsMember
+            FROM RoomParticipants
+            WHERE RoomID = ? AND UserID = ?
+        """
+        result = DatabaseManager.execute_query(query, (room_id, user_id), fetch_one=True)
+        return result[0] > 0 if result else False
+    except Exception as e:
+        app_logger.error(f"Is room member error: {e}")
+        return False
+
+@staticmethod
+def get_group_members(room_id):
+    """Get group members"""
+    try:
+        query = """
+            SELECT u.UserID, u.FullName, u.Username, rp.Role, rp.JoinedAt, u.Status
+            FROM RoomParticipants rp
+            JOIN Users u ON rp.UserID = u.UserID
+            WHERE rp.RoomID = ?
+            ORDER BY rp.Role DESC, u.FullName
+        """
+        members = DatabaseManager.execute_query(query, (room_id,), fetch_all=True)
+        return [{
+            'user_id': member[0],
+            'full_name': member[1],
+            'username': member[2],
+            'role': member[3],
+            'joined_at': member[4].strftime('%Y-%m-%d %H:%M:%S') if member[4] else '',
+            'status': member[5]
+        } for member in members]
+    except Exception as e:
+        app_logger.error(f"Get group members error: {e}")
+        return []
+
+@staticmethod
+def search_messages_in_room(room_id, query, page=1, limit=20):
+    """Search messages in a room"""
+    try:
+        offset = (page - 1) * limit
+        
+        # Search messages
+        search_query = """
+            SELECT m.MessageID, m.SenderID, u.FullName as SenderName, m.Content,
+                   m.MessageType, m.SentAt, m.EditedAt, m.IsDeleted
+            FROM Messages m
+            JOIN Users u ON m.SenderID = u.UserID
+            WHERE m.RoomID = ? AND (m.IsDeleted IS NULL OR m.IsDeleted = 0)
+              AND (m.Content LIKE ? OR u.FullName LIKE ?)
+            ORDER BY m.SentAt DESC
+            OFFSET ? ROWS FETCH NEXT ? ROWS ONLY
+        """
+        messages = DatabaseManager.execute_query(search_query, (room_id, f"%{query}%", f"%{query}%", offset, limit), fetch_all=True)
+        
+        # Get total count
+        count_query = """
+            SELECT COUNT(*) as TotalResults
+            FROM Messages m
+            JOIN Users u ON m.SenderID = u.UserID
+            WHERE m.RoomID = ? AND (m.IsDeleted IS NULL OR m.IsDeleted = 0)
+              AND (m.Content LIKE ? OR u.FullName LIKE ?)
+        """
+        total = DatabaseManager.execute_query(count_query, (room_id, f"%{query}%", f"%{query}%"), fetch_one=True)[0]
+        
+        return {
+            'messages': [{
+                'message_id': msg[0],
+                'sender_id': msg[1],
+                'sender_name': msg[2],
+                'content': msg[3],
+                'message_type': msg[4],
+                'sent_at': msg[5].strftime('%Y-%m-%d %H:%M:%S') if msg[5] else '',
+                'edited_at': msg[6].strftime('%Y-%m-%d %H:%M:%S') if msg[6] else None,
+                'is_deleted': bool(msg[7])
+            } for msg in messages],
+            'total': total,
+            'page': page,
+            'limit': limit
+        }
+    except Exception as e:
+        app_logger.error(f"Search messages in room error: {e}")
+        return {'messages': [], 'total': 0, 'page': page, 'limit': limit}
+
+@staticmethod
+def global_search_messages(user_id, query, page=1, limit=20):
+    """Global search across all user's rooms"""
+    try:
+        offset = (page - 1) * limit
+        
+        # Search messages
+        search_query = """
+            SELECT DISTINCT m.MessageID, m.SenderID, u.FullName as SenderName, m.Content,
+                   m.MessageType, m.SentAt, m.RoomID, r.RoomName,
+                   CASE WHEN r.IsGroup = 1 THEN r.RoomName ELSE 'Chat riêng' END as RoomDisplayName
+            FROM Messages m
+            JOIN Users u ON m.SenderID = u.UserID
+            JOIN Rooms r ON m.RoomID = r.RoomID
+            JOIN RoomParticipants rp ON r.RoomID = rp.RoomID AND rp.UserID = ?
+            WHERE (m.IsDeleted IS NULL OR m.IsDeleted = 0)
+              AND (m.Content LIKE ? OR u.FullName LIKE ? OR r.RoomName LIKE ?)
+            ORDER BY m.SentAt DESC
+            OFFSET ? ROWS FETCH NEXT ? ROWS ONLY
+        """
+        messages = DatabaseManager.execute_query(search_query, (user_id, f"%{query}%", f"%{query}%", f"%{query}%", offset, limit), fetch_all=True)
+        
+        # Get total count
+        count_query = """
+            SELECT COUNT(DISTINCT m.MessageID) as TotalResults
+            FROM Messages m
+            JOIN Users u ON m.SenderID = u.UserID
+            JOIN Rooms r ON m.RoomID = r.RoomID
+            JOIN RoomParticipants rp ON r.RoomID = rp.RoomID AND rp.UserID = ?
+            WHERE (m.IsDeleted IS NULL OR m.IsDeleted = 0)
+              AND (m.Content LIKE ? OR u.FullName LIKE ? OR r.RoomName LIKE ?)
+        """
+        total = DatabaseManager.execute_query(count_query, (user_id, f"%{query}%", f"%{query}%", f"%{query}%"), fetch_one=True)[0]
+        
+        return {
+            'messages': [{
+                'message_id': msg[0],
+                'sender_id': msg[1],
+                'sender_name': msg[2],
+                'content': msg[3],
+                'type': msg[4],
+                'sent_at': msg[5].strftime('%Y-%m-%d %H:%M:%S') if msg[5] else '',
+                'room_id': msg[6],
+                'room_name': msg[7],
+                'room_display_name': msg[8]
+            } for msg in messages],
+            'total': total,
+            'page': page,
+            'limit': limit
+        }
+    except Exception as e:
+        app_logger.error(f"Global search messages error: {e}")
+        return {'messages': [], 'total': 0, 'page': page, 'limit': limit}
+
+@staticmethod
+def get_search_suggestions(user_id, query):
+    """Get search suggestions for users and rooms"""
+    try:
+        search_query = """
+            SELECT DISTINCT 'user' as type, u.FullName as name, u.Username as username
+            FROM Users u
+            WHERE u.UserID != ? AND (u.FullName LIKE ? OR u.Username LIKE ?)
+            UNION ALL
+            SELECT DISTINCT 'room' as type, r.RoomName as name, '' as username
+            FROM Rooms r
+            JOIN RoomParticipants rp ON r.RoomID = rp.RoomID AND rp.UserID = ?
+            WHERE r.RoomName LIKE ?
+            ORDER BY name
+        """
+        suggestions = DatabaseManager.execute_query(search_query, (user_id, f"%{query}%", f"%{query}%", user_id, f"%{query}%"), fetch_all=True)
+        return [{
+            'type': sug[0],
+            'name': sug[1],
+            'username': sug[2]
+        } for sug in suggestions]
+    except Exception as e:
+        app_logger.error(f"Get search suggestions error: {e}")
+        return []
     
     @staticmethod
     def update_group_info(room_id, room_name, description=None):

@@ -764,6 +764,31 @@ def handle_message(data):
     
     emit('response', payload, room=room)
 
+    # Send email notifications to users who have enabled email notifications
+    try:
+        users_to_notify = database.DatabaseManager.get_users_with_email_notification_enabled(room)
+        sender_name = session.get('user_name', 'Unknown')
+        
+        for user in users_to_notify:
+            if user['user_id'] != current_user_id:  # Don't send to sender
+                email_subject = f"Tin nhắn mới từ {sender_name}"
+                email_body = f"""
+Xin chào {user['full_name']},
+
+Bạn có tin nhắn mới từ {sender_name}:
+
+{message_text[:200]}{'...' if len(message_text) > 200 else ''}
+
+Đăng nhập vào ChatAI để xem tin nhắn đầy đủ.
+
+---
+Đây là email tự động, vui lòng không trả lời.
+"""
+                send_email(email_subject, user['email'], email_body)
+                app_logger.info(f"Email notification sent to {user['email']}")
+    except Exception as e:
+        app_logger.error(f"Lỗi gửi email notification: {e}")
+
     if message_type == 'Text' and "@ai" in message_text.lower():
         bot_msg = f"Chào {data.get('user', 'bạn')}, tôi là AI của DNU. Tin nhắn của bạn đã được lưu!"
         save_to_sql(current_user_id, bot_msg, msg_type='Text', room_id=room)
@@ -1089,11 +1114,62 @@ def handle_pin_message(data):
 
             app_logger.info(f"User {user_id} pinned message {message_id}")
         else:
-            emit('pin_error', {'message': 'Bạn không có quyền pin tin nhắn này'})
+            emit('pin_error', {'message': 'Lỗi pin tin nhắn'})
 
     except Exception as e:
         app_logger.error(f"Lỗi pin message: {e}")
         emit('pin_error', {'message': f'Lỗi: {str(e)}'})
+
+
+@socketio.on('forward_message')
+def handle_forward_message(data):
+    """Xử lý forward tin nhắn"""
+    try:
+        message_id = data.get('message_id')
+        target_room_id = data.get('target_room_id')
+        user_id = session.get('user_id')
+        user_name = session.get('user_name', 'Unknown')
+
+        if not message_id or not target_room_id or not user_id:
+            emit('forward_error', {'message': 'Dữ liệu không hợp lệ'})
+            return
+
+        # Check if user is member of target room
+        if not database.DatabaseManager.is_room_member(target_room_id, user_id):
+            emit('forward_error', {'message': 'Bạn không phải thành viên của phòng này'})
+            return
+
+        # Forward message
+        success = database.DatabaseManager.save_forwarded_message(user_id, message_id, target_room_id)
+
+        if success:
+            # Get original message info
+            query = """
+                SELECT Content, MessageType, u.FullName as OriginalSender
+                FROM Messages m
+                JOIN Users u ON m.SenderID = u.UserID
+                WHERE m.MessageID = ?
+            """
+            original = database.DatabaseManager.execute_query(query, (message_id,), fetch_one=True)
+
+            if original:
+                emit('message_forwarded', {
+                    'message_id': message_id,
+                    'target_room_id': target_room_id,
+                    'content': original[0],
+                    'message_type': original[1],
+                    'original_sender': original[2],
+                    'forwarded_by': user_name,
+                    'sent_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                }, room=target_room_id)
+
+            app_logger.info(f"User {user_name} forwarded message {message_id} to room {target_room_id}")
+        else:
+            emit('forward_error', {'message': 'Lỗi forward tin nhắn'})
+
+    except Exception as e:
+        app_logger.error(f"Lỗi forward message: {e}")
+        emit('forward_error', {'message': f'Lỗi: {str(e)}'})
 
 
 @socketio.on('unpin_message')
@@ -1265,6 +1341,101 @@ def get_last_seen(user_id):
     except Exception as e:
         app_logger.error(f"Lỗi get last seen: {e}")
         return jsonify({'success': False, 'last_seen': None})
+
+
+@app.route('/set_user_status_message', methods=['POST'])
+def set_user_status_message():
+    """Set user status message"""
+    if 'user_id' not in session:
+        return jsonify({'success': False, 'message': 'Chưa đăng nhập'})
+
+    try:
+        status_message = request.json.get('status_message', '').strip()
+        if len(status_message) > 200:
+            return jsonify({'success': False, 'message': 'Status message quá dài (tối đa 200 ký tự)'})
+        
+        success = database.DatabaseManager.set_user_status_message(session['user_id'], status_message)
+        if success:
+            return jsonify({'success': True, 'message': 'Đã cập nhật status message'})
+        else:
+            return jsonify({'success': False, 'message': 'Lỗi cập nhật status message'})
+    except Exception as e:
+        app_logger.error(f"Lỗi set user status message: {e}")
+        return jsonify({'success': False, 'message': f'Lỗi: {str(e)}'})
+
+
+@app.route('/get_user_status_message/<int:user_id>')
+def get_user_status_message(user_id):
+    """Get user status message"""
+    try:
+        status_message = database.DatabaseManager.get_user_status_message(user_id)
+        return jsonify({'success': True, 'status_message': status_message})
+    except Exception as e:
+        app_logger.error(f"Lỗi get user status message: {e}")
+        return jsonify({'success': False, 'status_message': ''})
+
+
+@app.route('/forward_message', methods=['POST'])
+def forward_message():
+    """Forward message to another room"""
+    if 'user_id' not in session:
+        return jsonify({'success': False, 'message': 'Chưa đăng nhập'})
+
+    try:
+        message_id = request.json.get('message_id')
+        target_room_id = request.json.get('target_room_id')
+
+        if not message_id or not target_room_id:
+            return jsonify({'success': False, 'message': 'Thiếu thông tin'})
+
+        # Check if user is member of target room
+        if not database.DatabaseManager.is_room_member(target_room_id, session['user_id']):
+            return jsonify({'success': False, 'message': 'Bạn không phải thành viên của phòng này'})
+
+        # Forward message
+        success = database.DatabaseManager.save_forwarded_message(session['user_id'], message_id, target_room_id)
+
+        if success:
+            return jsonify({'success': True, 'message': 'Đã forward tin nhắn'})
+        else:
+            return jsonify({'success': False, 'message': 'Lỗi forward tin nhắn'})
+    except Exception as e:
+        app_logger.error(f"Lỗi forward message: {e}")
+        return jsonify({'success': False, 'message': f'Lỗi: {str(e)}'})
+
+
+@app.route('/enable_email_notifications', methods=['POST'])
+def enable_email_notifications():
+    """Bật/tắt email notifications cho user"""
+    if 'user_id' not in session:
+        return jsonify({'success': False, 'message': 'Chưa đăng nhập'})
+
+    try:
+        data = request.get_json()
+        enabled = data.get('enabled', True)
+        database.DatabaseManager.update_email_notification_enabled(session['user_id'], enabled)
+        return jsonify({
+            'success': True,
+            'message': 'Cài đặt email thông báo đã được cập nhật'
+        })
+
+    except Exception as e:
+        app_logger.error(f"Lỗi enable email notifications: {e}")
+        return jsonify({'success': False, 'message': f'Lỗi: {str(e)}'})
+
+
+@app.route('/get_email_notification_status')
+def get_email_notification_status():
+    """Lấy trạng thái email notification của user"""
+    if 'user_id' not in session:
+        return jsonify({'success': False, 'enabled': False})
+
+    try:
+        enabled = database.DatabaseManager.get_email_notification_enabled(session['user_id'])
+        return jsonify({'success': True, 'enabled': enabled})
+    except Exception as e:
+        app_logger.error(f"Lỗi get email notification status: {e}")
+        return jsonify({'success': False, 'enabled': False})
 
 
 @app.route('/mute_room/<int:room_id>', methods=['POST'])
