@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>DNU Chat - Authenticate</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #f0f2f5; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; }
+        .auth-container { background: white; padding: 30px; border-radius: 15px; box-shadow: 0 10px 25px rgba(0,0,0,0.1); width: 380px; transition: all 0.3s; }
+        h2 { text-align: center; color: #0084ff; }
+        input { width: 100%; padding: 12px; margin: 10px 0; border: 1px solid #ddd; border-radius: 8px; box-sizing: border-box; }
+        button { width: 100%; padding: 12px; border: none; border-radius: 8px; cursor: pointer; font-weight: bold; font-size: 16px; transition: 0.3s; }
+        .btn-login { background: #0084ff; color: white; }
+        .btn-register { background: #28a745; color: white; }
+        .toggle-link { text-align: center; margin-top: 15px; font-size: 14px; color: #65676b; cursor: pointer; }
+        .toggle-link b { color: #0084ff; }
+        .hidden { display: none; }
+    </style>
+</head>
+<body>
+    <div class="auth-container">
+        {% with messages = get_flashed_messages() %}
+            {% if messages %}
+                <div style="background:#ffe8e8; color:#a00000; border:1px solid #f5c2c2; padding:12px; border-radius:10px; margin-bottom:15px;">
+                    {% for message in messages %}
+                        <div>{{ message }}</div>
+                    {% endfor %}
+                </div>
+            {% endif %}
+        {% endwith %}
+
+        <!-- FORM ĐĂNG NHẬP -->
+        <div id="login-form" class="{{ 'hidden' if show_register else '' }}">
+            <h2><i class="fas fa-comments"></i> Đăng nhập</h2>
+            <form method="POST" action="/login">
+                <input type="text" name="username" placeholder="Tên đăng nhập hoặc email" required>
+                <input type="password" name="password" placeholder="Mật khẩu" required>
+                <button type="submit" class="btn-login">Đăng nhập</button>
+            </form>
+            <div class="toggle-link" onclick="window.location.href='/forgot_password'">Quên mật khẩu? <b>Nhấn vào đây</b></div>
+            <div style="padding: 10px 0; text-align:center; color:#666;">Hoặc đăng nhập bằng</div>
+            <div style="display:flex; gap:10px; justify-content:center;">
+                <a href="{{ url_for('google.login') }}" style="text-decoration:none;"><button class="btn-register" style="background:#db4437; width:auto; padding:10px 15px; border:none; cursor:pointer;" type="button"><i class="fab fa-google"></i> Google</button></a>
+                <a href="{{ url_for('facebook.login') }}" style="text-decoration:none;"><button class="btn-register" style="background:#4267B2; width:auto; padding:10px 15px; border:none; cursor:pointer;" type="button"><i class="fab fa-facebook-f"></i> Facebook</button></a>
+            </div>
+            <div class="toggle-link" onclick="toggleAuth()">Chưa có tài khoản? <b>Đăng ký ngay</b></div>
+        </div>
+
+        <!-- FORM ĐĂNG KÝ -->
+        <div id="register-form" class="{{ '' if show_register else 'hidden' }}">
+            <h2><i class="fas fa-user-plus"></i> Đăng ký</h2>
+            <form method="POST" action="/register">
+                <input type="text" name="username" placeholder="Tên đăng nhập" required>
+                <input type="text" name="fullname" placeholder="Họ và tên" required>
+                <input type="email" name="email" placeholder="Email" required>
+                <input type="password" name="password" placeholder="Mật khẩu" required>
+                <input type="password" name="confirm_password" placeholder="Xác nhận mật khẩu" required>
+                <button type="submit" class="btn-register">Tạo tài khoản</button>
+            </form>
+            <div class="toggle-link" onclick="toggleAuth()">Đã có tài khoản? <b>Đăng nhập</b></div>
+        </div>
+    </div>
+
+    <script>
+        function toggleAuth() {
+            const loginForm = document.getElementById('login-form');
+            const regForm = document.getElementById('register-form');
+            loginForm.classList.toggle('hidden');
+            regForm.classList.toggle('hidden');
+        }
+    </script>
+</body>
+</html>

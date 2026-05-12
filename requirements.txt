@@ -1,0 +1,11 @@
+Flask
+Flask-SocketIO
+Flask-Mail
+Flask-Dance
+Werkzeug
+pyodbc
+eventlet
+python-dotenv
+pyotp
+qrcode
+Pillow

@@ -1,0 +1,30 @@
+# --- BẢO MẬT: Không đẩy các file chứa mật khẩu ---
+.env
+.env.example
+key.json
+secrets.toml
+
+# --- MÔI TRƯỜNG: Không đẩy các thư viện nặng (máy chủ sẽ tự cài sau) ---
+.venv/
+venv/
+env/
+bin/
+lib/
+share/
+
+# --- FILE TẠM: Các file rác phát sinh khi chạy Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+
+# --- NHẬT KÝ & DỮ LIỆU CỤC BỘ ---
+logs/
+*.log
+*.sql
+*.sqlite
+
+# --- CẤU HÌNH CỦA TRÌNH SOẠN THẢO (Tùy chọn) ---
+.vscode/
+.idea/
+.windsurf/
