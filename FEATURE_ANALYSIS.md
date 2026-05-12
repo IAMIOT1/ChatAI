@@ -65,7 +65,7 @@
 - ✅ **Group settings** - Name, description, avatar
 - ✅ **Admin permissions** - Group admin controls
 - ✅ **Leave group** - Exit group chat
-- ❌ **Group invites** - Invite users to groups
+- ✅ **Group invites** - Invite users to groups
 
 ### 🔐 Security & Privacy
 - ❌ **Two-factor authentication** - 2FA login

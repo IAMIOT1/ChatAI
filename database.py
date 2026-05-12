@@ -3,6 +3,7 @@
 """
 Database management module for ChatAI application
 """
+import psycopg2
 import pyodbc
 import os
 from datetime import datetime, timedelta
@@ -85,6 +86,17 @@ class DatabaseManager:
             app_logger.error(f"User creation error: {e}")
             raise
     
+    @staticmethod
+    def get_user_by_phone(phone):
+        """Get user by phone number"""
+        try:
+            DatabaseManager.ensure_phone_column()
+            query = "SELECT UserID, Username, Password, FullName, Phone, Status FROM Users WHERE Phone = ?"
+            return DatabaseManager.execute_query(query, (phone,), fetch_one=True)
+        except Exception as e:
+            app_logger.error(f"Get user by phone error: {e}")
+            return None
+
     @staticmethod
     def get_user_by_username(username):
         """Get user by username"""
@@ -290,9 +302,10 @@ class DatabaseManager:
     def get_user_profile(user_id):
         """Get user profile"""
         try:
+            DatabaseManager.ensure_phone_column()
             DatabaseManager.ensure_last_seen_column()
             query = """
-                SELECT FullName, Username, Email, Status, LastSeenAt
+                SELECT FullName, Username, Phone, Status, LastSeenAt
                 FROM Users
                 WHERE UserID = ?
             """
@@ -301,14 +314,14 @@ class DatabaseManager:
                 return {
                     'full_name': user[0],
                     'username': user[1],
-                    'email': user[2],
+                    'phone': user[2],
                     'status': user[3],
                     'last_seen': user[4].strftime('%Y-%m-%d %H:%M:%S') if user[4] else None
                 }
             return {
                 'full_name': '',
                 'username': '',
-                'email': '',
+                'phone': '',
                 'status': 'Offline',
                 'last_seen': None
             }
@@ -317,7 +330,7 @@ class DatabaseManager:
             return {
                 'full_name': '',
                 'username': '',
-                'email': '',
+                'phone': '',
                 'status': 'Offline',
                 'last_seen': None
             }
@@ -738,6 +751,7 @@ class DatabaseManager:
     def search(query, user_id):
         """Search for groups and users"""
         try:
+            DatabaseManager.ensure_phone_column()
             pattern = f"%{query}%"
             results = []
             
@@ -747,11 +761,11 @@ class DatabaseManager:
             for group in groups:
                 results.append({'id': group[0], 'type': 'Group', 'name': group[1]})
             
-            # Search users
-            query_sql = "SELECT UserID, FullName, Username FROM Users WHERE UserID != ? AND (FullName LIKE ? OR Username LIKE ?)"
-            users = DatabaseManager.execute_query(query_sql, (user_id, pattern, pattern), fetch_all=True)
+            # Search users by phone, fullname, or username
+            query_sql = "SELECT UserID, FullName, Username, Phone FROM Users WHERE UserID != ? AND (Phone LIKE ? OR FullName LIKE ? OR Username LIKE ?)"
+            users = DatabaseManager.execute_query(query_sql, (user_id, pattern, pattern, pattern), fetch_all=True)
             for user in users:
-                results.append({'id': user[0], 'type': 'User', 'name': user[1]})
+                results.append({'id': user[0], 'type': 'User', 'name': user[1], 'phone': user[3]})
             
             return results
         except Exception as e:
@@ -759,22 +773,23 @@ class DatabaseManager:
             return []
     
     @staticmethod
-    def update_user_profile(user_id, fullname, username, avatar_url=None):
+    def update_user_profile(user_id, fullname, username, avatar_url=None, phone=None):
         """Update user profile"""
         try:
+            DatabaseManager.ensure_phone_column()
             # Update basic info
             query = "UPDATE Users SET FullName = ?, Username = ? WHERE UserID = ?"
             DatabaseManager.execute_query(query, (fullname, username, user_id))
             
             # Update avatar if provided
             if avatar_url:
-                # Ensure AvatarUrl column exists
-                if not DatabaseManager.column_exists('Users', 'AvatarUrl'):
-                    query = "ALTER TABLE Users ADD AvatarUrl NVARCHAR(500) NULL"
-                    DatabaseManager.execute_query(query)
-                
                 query = "UPDATE Users SET AvatarUrl = ? WHERE UserID = ?"
                 DatabaseManager.execute_query(query, (avatar_url, user_id))
+            
+            # Update phone if provided
+            if phone:
+                query = "UPDATE Users SET Phone = ? WHERE UserID = ?"
+                DatabaseManager.execute_query(query, (phone, user_id))
             
             return True
         except Exception as e:
@@ -782,33 +797,51 @@ class DatabaseManager:
             return False
     
     @staticmethod
-    def check_user_exists(username, email):
-        """Check if user already exists by username or email"""
+    def check_user_exists(username, phone):
+        """Check if user already exists by username or phone"""
         try:
-            query = "SELECT 1 FROM Users WHERE Username = ? OR Email = ?"
-            result = DatabaseManager.execute_query(query, (username, email), fetch_one=True)
+            DatabaseManager.ensure_phone_column()
+            query = "SELECT 1 FROM Users WHERE Username = ? OR Phone = ?"
+            result = DatabaseManager.execute_query(query, (username, phone), fetch_one=True)
             return result is not None
         except Exception as e:
             app_logger.error(f"Check user exists error: {e}")
             return False
     
     @staticmethod
-    def register_user(username, fullname, email, password, verification_token=None):
+    def register_user(username, fullname, phone, password, verification_token=None, is_verified=False):
         """Register a new user"""
         try:
             from werkzeug.security import generate_password_hash
             hashed_password = generate_password_hash(password)
             
+            # Ensure Phone column exists
+            DatabaseManager.ensure_phone_column()
+            
+            # Debug log
+            app_logger.info(f"Registering user: username={username}, phone={phone}, password_hash={hashed_password[:20] if hashed_password else None}..., is_verified={is_verified}")
+            
             query = """
-                INSERT INTO Users (Username, FullName, Email, Password, Status, IsVerified, VerificationToken)
-                VALUES (?, ?, ?, ?, 'Offline', 0, ?)
+                INSERT INTO Users (Username, FullName, Phone, Password, Status, IsVerified, VerificationToken)
+                VALUES (?, ?, ?, ?, 'Offline', ?, ?)
             """
-            DatabaseManager.execute_query(query, (username, fullname, email, hashed_password, verification_token))
+            DatabaseManager.execute_query(query, (username, fullname, phone, hashed_password, 1 if is_verified else 0, verification_token))
             return True
         except Exception as e:
             app_logger.error(f"Register user error: {e}")
             return False
     
+    @staticmethod
+    def ensure_phone_column():
+        """Ensure Phone column exists in Users table"""
+        try:
+            if not DatabaseManager.column_exists('Users', 'Phone'):
+                query = "ALTER TABLE Users ADD Phone NVARCHAR(20) NULL"
+                DatabaseManager.execute_query(query)
+                app_logger.info("Added Phone column to Users table")
+        except Exception as e:
+            app_logger.error(f"Ensure phone column error: {e}")
+
     @staticmethod
     def ensure_shared_files_table():
         """Ensure SharedFiles table exists"""

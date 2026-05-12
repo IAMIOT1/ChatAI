@@ -1291,6 +1291,7 @@
             <form class="profile-form" method="POST" action="/update_profile" enctype="multipart/form-data" style="padding: 0 20px 15px;">
                 <input type="text" name="fullname" placeholder="Họ và tên" value="{{ profile.full_name }}">
                 <input type="text" name="username" placeholder="Tên đăng nhập" value="{{ profile.username }}">
+                <input type="tel" name="phone" placeholder="Số điện thoại" value="{{ profile.phone or '' }}" pattern="[0-9]{10}">
                 <div style="margin: 10px 0;">
                     <label style="font-size:12px; color:#666; display:block; margin-bottom:5px;">Avatar:</label>
                     <input type="file" name="avatar" accept="image" style="width:100%; padding:8px; border:1px solid #ddd; border-radius:8px; font-size:12px;">
@@ -1329,6 +1330,32 @@
                     <button type="button" onclick="closeForwardModal()" style="padding:8px 16px; border-radius:8px; border:none; background:#aaa; color:#fff; cursor:pointer;">Hủy</button>
                     <button type="button" onclick="submitForward()" style="padding:8px 16px; border-radius:8px; border:none; background:#0091ff; color:#fff; cursor:pointer;">Forward</button>
                 </div>
+            </div>
+        </div>
+        
+        <!-- Group Invite Modal -->
+        <div id="group-invite-modal" class="forward-modal">
+            <div class="forward-modal-content">
+                <div style="font-weight:bold; margin-bottom:15px; font-size:18px;">Mời thành viên vào nhóm</div>
+                <label style="font-size:12px; color:#666; display:block; margin-bottom:5px;">Chọn user:</label>
+                <select id="invite-user-select">
+                    <option value="">-- Chọn user --</option>
+                </select>
+                <div class="edit-modal-buttons">
+                    <button type="button" onclick="closeGroupInviteModal()" style="padding:8px 16px; border-radius:8px; border:none; background:#aaa; color:#fff; cursor:pointer;">Hủy</button>
+                    <button type="button" onclick="sendGroupInvite()" style="padding:8px 16px; border-radius:8px; border:none; background:#0091ff; color:#fff; cursor:pointer;">Gửi lời mời</button>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Pending Invites Panel -->
+        <div id="pending-invites-panel" class="edit-modal">
+            <div class="edit-modal-content">
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:15px;">
+                    <h3 style="margin:0;">Lời mời nhóm</h3>
+                    <button class="cancel" onclick="closePendingInvitesPanel()" style="background:#dc3545; color:white; border:none; padding:8px 12px;">Đóng</button>
+                </div>
+                <div id="pending-invites-list" style="max-height: 320px; overflow-y:auto;">Chưa có lời mời</div>
             </div>
         </div>
             <!-- THANH TÌM KIẾM MỚI -->
@@ -1425,6 +1452,9 @@
                 <button id="notification-btn" onclick="toggleNotifications()" title="Thông báo" style="position:relative;">
                     <i class="fas fa-bell"></i>
                     <span id="notification-count" style="position:absolute; top:-8px; right:-8px; background:#ff6b6b; color:white; border-radius:50%; width:20px; height:20px; font-size:12px; display:none; align-items:center; justify-content:center; font-weight:bold;">0</span>
+                </button>
+                <button id="invites-btn" onclick="openPendingInvitesPanel()" title="Lời mời nhóm" style="background:none; border:none; color:inherit; cursor:pointer; margin-left:10px;">
+                    <i class="fas fa-user-plus"></i>
                 </button>
                 <button id="video-btn-header" onclick="startVideoCall('')" title="Video call" style="background:none; border:none; color:inherit; cursor:pointer;">
                     <i class="fas fa-video"></i>
@@ -1655,6 +1685,159 @@
                 } else {
                     alert(data.message);
                     checkbox.checked = !enabled;  // Revert if failed
+                }
+            });
+        }
+
+        var currentInviteRoomId = null;
+
+        function openGroupInviteModal(roomId) {
+            currentInviteRoomId = roomId;
+            
+            // Load users not in the room
+            var userSelect = document.getElementById('invite-user-select');
+            userSelect.innerHTML = '<option value="">-- Chọn user --</option>';
+            
+            // Get all users (simplified - in real app, you'd filter out current room members)
+            fetch('/get_all_users')
+                .then(function(response) { return response.json(); })
+                .then(function(data) {
+                    if (data.success && data.users) {
+                        data.users.forEach(function(user) {
+                            userSelect.innerHTML += '<option value="' + user.user_id + '">' + user.full_name + ' (@' + user.username + ')</option>';
+                        });
+                    }
+                });
+            
+            document.getElementById('group-invite-modal').style.display = 'flex';
+        }
+
+        function closeGroupInviteModal() {
+            document.getElementById('group-invite-modal').style.display = 'none';
+            currentInviteRoomId = null;
+        }
+
+        function sendGroupInvite() {
+            var inviteeId = document.getElementById('invite-user-select').value;
+            
+            if (!inviteeId) {
+                alert('Vui lòng chọn user để mời');
+                return;
+            }
+            
+            if (!currentInviteRoomId) {
+                alert('Lỗi: Không có phòng để mời');
+                return;
+            }
+            
+            fetch('/send_group_invite', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    room_id: currentInviteRoomId,
+                    invitee_id: inviteeId
+                })
+            })
+            .then(function(response) { return response.json(); })
+            .then(function(data) {
+                if (data.success) {
+                    alert('Đã gửi lời mời thành công!');
+                    closeGroupInviteModal();
+                } else {
+                    alert(data.message);
+                }
+            });
+        }
+
+        function openPendingInvitesPanel() {
+            var panel = document.getElementById('pending-invites-panel');
+            if (!panel) return;
+            
+            panel.classList.add('show');
+            panel.style.display = 'flex';
+            loadPendingInvites();
+        }
+
+        function closePendingInvitesPanel() {
+            var panel = document.getElementById('pending-invites-panel');
+            if (panel) {
+                panel.classList.remove('show');
+                panel.style.display = 'none';
+            }
+        }
+
+        function loadPendingInvites() {
+            fetch('/get_pending_invites')
+                .then(function(response) { return response.json(); })
+                .then(function(data) {
+                    var list = document.getElementById('pending-invites-list');
+                    if (!list) return;
+
+                    if (!data.invites || data.invites.length === 0) {
+                        list.innerHTML = '<div style="padding:15px; color:#999;">Chưa có lời mời</div>';
+                        return;
+                    }
+
+                    var html = '';
+                    data.invites.forEach(function(invite) {
+                        html += `
+                            <div class="notification-item" style="padding:12px; border-bottom:1px solid #eee;">
+                                <div style="display:flex; align-items:center; gap:10px;">
+                                    <i class="fas fa-users" style="color:#0091ff; font-size:16px;"></i>
+                                    <div style="flex:1;">
+                                        <div style="font-weight:bold; font-size:14px;">${invite.room_name}</div>
+                                        <div style="font-size:12px; color:#666;">Mời bởi: ${invite.inviter_name}</div>
+                                    </div>
+                                    <div style="display:flex; gap:5px;">
+                                        <button onclick="acceptInvite(${invite.invite_id})" style="padding:5px 10px; border-radius:6px; border:none; background:#28a745; color:white; cursor:pointer; font-size:12px;">Chấp nhận</button>
+                                        <button onclick="declineInvite(${invite.invite_id})" style="padding:5px 10px; border-radius:6px; border:none; background:#dc3545; color:white; cursor:pointer; font-size:12px;">Từ chối</button>
+                                    </div>
+                                </div>
+                            </div>
+                        `;
+                    });
+                    list.innerHTML = html;
+                })
+                .catch(function(error) {
+                    console.error('Error loading pending invites:', error);
+                    var list = document.getElementById('pending-invites-list');
+                    if (list) {
+                        list.innerHTML = '<div style="padding:15px; color:#999;">Lỗi tải lời mời</div>';
+                    }
+                });
+        }
+
+        function acceptInvite(inviteId) {
+            fetch('/accept_decline_invite/' + inviteId, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ action: 'accept' })
+            })
+            .then(function(response) { return response.json(); })
+            .then(function(data) {
+                if (data.success) {
+                    alert(data.message);
+                    loadPendingInvites();
+                    location.reload();  // Reload to refresh room list
+                } else {
+                    alert(data.message);
+                }
+            });
+        }
+
+        function declineInvite(inviteId) {
+            fetch('/accept_decline_invite/' + inviteId, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ action: 'decline' })
+            })
+            .then(function(response) { return response.json(); })
+            .then(function(data) {
+                if (data.success) {
+                    alert(data.message);
+                    loadPendingInvites();
+                } else {
+                    alert(data.message);
                 }
             });
         }

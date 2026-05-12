@@ -96,6 +96,13 @@ def generate_token(length=48):
     return secrets.token_urlsafe(length)
 
 
+def validate_phone(phone):
+    """Validate phone format - 10 digits"""
+    import re
+    pattern = r'^[0-9]{10}$'
+    return re.match(pattern, phone) is not None
+
+
 def validate_email(email):
     """Validate email format"""
     import re
@@ -220,7 +227,8 @@ def index():
         unread_counts = get_unread_counts(session['user_id'])
         
         # Lấy danh sách bạn bè (loại trừ bản thân)
-        query = "SELECT UserID, FullName, Status FROM Users WHERE UserID != ?"
+        database.DatabaseManager.ensure_phone_column()
+        query = "SELECT UserID, FullName, Status, Phone FROM Users WHERE UserID != ?"
         friends = database.DatabaseManager.execute_query(query, (session['user_id'],), fetch_all=True)
         
         default_room_id = group_rooms[0]['room_id'] if group_rooms else (private_rooms[0]['room_id'] if private_rooms else 1)
@@ -406,6 +414,7 @@ def update_profile():
 
     fullname = request.form.get('fullname', '').strip()
     username = request.form.get('username', '').strip()
+    phone = request.form.get('phone', '').strip()
     avatar_url = None
 
     try:
@@ -437,6 +446,8 @@ def update_profile():
         if user:
             user.fullname = fullname
             user.username = username
+            if phone:
+                user.phone = phone
             if avatar_url:
                 user.avatar_url = avatar_url
             db.session.commit()
@@ -448,7 +459,7 @@ def update_profile():
         return redirect(url_for('profile'))
 
         # Cập nhật thông tin cơ bản
-        database.DatabaseManager.update_user_profile(session['user_id'], fullname, username, avatar_url)
+        database.DatabaseManager.update_user_profile(session['user_id'], fullname, username, avatar_url, phone)
 
         # Cập nhật session
         session['user_name'] = fullname
@@ -465,13 +476,14 @@ def login():
     if request.method == 'POST':
         identifier = request.form['username'].strip()
         password = request.form['password']
+
         try:
             # Try to get user by username first
             user = database.DatabaseManager.get_user_by_username(identifier)
             
-            # If not found, try by email
+            # If not found, try by phone
             if not user:
-                user = database.DatabaseManager.get_user_by_email(identifier)
+                user = database.DatabaseManager.get_user_by_phone(identifier)
 
             if user:
                 # Handle both tuple and Row object
@@ -484,13 +496,23 @@ def login():
                     password_hash = user[2]
                     full_name = user[3]
                 
-                # Kiểm tra password hash
+                # Debug log
+                app_logger.info(f"Login attempt: user_id={user_id}, password_hash={password_hash[:20] if password_hash else None}..., input_password={password[:10]}...")
+                
+                # Kiểm tra password hash - thử cả 2 cách
                 password_valid = False
                 if password_hash:
-                    if password_hash.startswith('$2'):  # Hashed password
+                    # Luôn thử check_password_hash trước
+                    try:
                         password_valid = check_password_hash(password_hash, password)
-                    else:  # Plain text password (old records)
+                        app_logger.info(f"Password check (hashed): {password_valid}")
+                    except Exception as e:
+                        app_logger.warning(f"Hashed check failed: {e}, trying plain text")
+                        # Nếu hash check fail, thử plain text
                         password_valid = (password_hash == password)
+                        app_logger.info(f"Password check (plain): {password_valid}")
+                else:
+                    app_logger.warning("Password hash is None or empty")
 
                 if password_valid:
                     # Bỏ qua kiểm tra xác thực email - cho phép đăng nhập ngay
@@ -508,12 +530,13 @@ def login():
             flash(f"Lỗi đăng nhập: {str(e)}")
     return render_template('login.html', show_register=False)
 
+
 @app.route('/register', methods=['GET', 'POST'])
 def register():
     if request.method == 'POST':
         username = request.form['username'].strip()
         fullname = request.form['fullname'].strip()
-        email = request.form['email'].strip().lower()
+        phone = request.form['phone'].strip()
         password = request.form['password']
         confirm_password = request.form.get('confirm_password', '')
 
@@ -526,8 +549,8 @@ def register():
             flash('Họ và tên không được để trống và phải có ít nhất 2 ký tự.')
             return render_template('login.html', show_register=True)
 
-        if not validate_email(email):
-            flash('Email không hợp lệ.')
+        if not validate_phone(phone):
+            flash('Số điện thoại không hợp lệ (phải 10 số).')
             return render_template('login.html', show_register=True)
 
         if not validate_password(password):
@@ -539,20 +562,14 @@ def register():
             return render_template('login.html', show_register=True)
 
         try:
-            if database.DatabaseManager.check_user_exists(username, email):
-                flash('Tên đăng nhập hoặc email đã được sử dụng. Vui lòng chọn khác.')
+            if database.DatabaseManager.check_user_exists(username, phone):
+                flash('Tên đăng nhập hoặc số điện thoại đã được sử dụng. Vui lòng chọn khác.')
                 return render_template('login.html', show_register=True)
             
-            token = generate_token()
-            database.DatabaseManager.register_user(username, fullname, email, password, token)
+            # Đăng ký với IsVerified = 1 (bỏ qua xác thực)
+            database.DatabaseManager.register_user(username, fullname, phone, password, verification_token=None, is_verified=True)
             
-            verify_url = url_for('verify_email', token=token, _external=True)
-            send_email(
-                'Xác thực tài khoản ChatAI',
-                email,
-                f'Xin chào {fullname},\n\nVui lòng nhấp vào liên kết sau để xác thực email và hoàn tất đăng ký:\n{verify_url}\n\nNếu bạn không yêu cầu đăng ký, hãy bỏ qua email này.'
-            )
-            flash('Đăng ký thành công! Kiểm tra email để xác thực tài khoản.')
+            flash('Đăng ký thành công! Bạn có thể đăng nhập ngay.')
             return redirect(url_for('login'))
         except Exception as e:
             flash(f"Lỗi đăng ký: {e}")
@@ -1991,13 +2008,91 @@ def leave_group(room_id):
         # Thông báo realtime
         emit('group_member_left', {
             'room_id': room_id,
-            'user_id': session['user_id']
-        }, room=f"room_{room_id}")
+            'user_id': session['user_id'],
+            'user_name': session.get('user_name', 'Unknown')
+        }, room=room_id)
 
         return jsonify({'success': True, 'message': 'Đã rời nhóm'})
-
     except Exception as e:
-        app_logger.error(f"Lỗi leave group: {e}")
+        app_logger.error(f"Lỗi rời nhóm: {e}")
+        return jsonify({'success': False, 'message': f'Lỗi: {str(e)}'})
+
+
+@app.route('/send_group_invite', methods=['POST'])
+def send_group_invite():
+    """Gửi group invite"""
+    if 'user_id' not in session:
+        return jsonify({'success': False, 'message': 'Chưa đăng nhập'})
+
+    try:
+        room_id = request.json.get('room_id')
+        invitee_id = request.json.get('invitee_id')
+
+        if not room_id or not invitee_id:
+            return jsonify({'success': False, 'message': 'Thiếu thông tin'})
+
+        # Check if user is admin or moderator
+        current_role = database.DatabaseManager.get_user_role(room_id, session['user_id'])
+        if current_role not in ['Admin', 'Moderator']:
+            return jsonify({'success': False, 'message': 'Bạn không có quyền mời thành viên'})
+
+        # Check if invitee is already a member
+        if database.DatabaseManager.is_room_member(room_id, invitee_id):
+            return jsonify({'success': False, 'message': 'User đã là thành viên của nhóm'})
+
+        # Create invite
+        success = database.DatabaseManager.create_group_invite(room_id, session['user_id'], invitee_id)
+
+        if success:
+            # Notify invitee via socket
+            emit('group_invite_received', {
+                'room_id': room_id,
+                'inviter_name': session.get('user_name', 'Unknown')
+            }, room=f"user_{invitee_id}")
+
+            return jsonify({'success': True, 'message': 'Đã gửi lời mời'})
+        else:
+            return jsonify({'success': False, 'message': 'Lỗi gửi lời mời hoặc lời mời đã tồn tại'})
+    except Exception as e:
+        app_logger.error(f"Lỗi gửi group invite: {e}")
+        return jsonify({'success': False, 'message': f'Lỗi: {str(e)}'})
+
+
+@app.route('/get_pending_invites')
+def get_pending_invites():
+    """Lấy danh sách pending invites của user"""
+    if 'user_id' not in session:
+        return jsonify({'success': False, 'invites': []})
+
+    try:
+        invites = database.DatabaseManager.get_pending_invites(session['user_id'])
+        return jsonify({'success': True, 'invites': invites})
+    except Exception as e:
+        app_logger.error(f"Lỗi get pending invites: {e}")
+        return jsonify({'success': False, 'invites': []})
+
+
+@app.route('/accept_decline_invite/<int:invite_id>', methods=['POST'])
+def accept_decline_invite(invite_id):
+    """Chấp nhận hoặc từ chối group invite"""
+    if 'user_id' not in session:
+        return jsonify({'success': False, 'message': 'Chưa đăng nhập'})
+
+    try:
+        action = request.json.get('action', 'accept')
+
+        if action not in ['accept', 'decline']:
+            return jsonify({'success': False, 'message': 'Hành động không hợp lệ'})
+
+        success = database.DatabaseManager.accept_decline_invite(invite_id, session['user_id'], action)
+
+        if success:
+            message = 'Đã chấp nhận lời mời' if action == 'accept' else 'Đã từ chối lời mời'
+            return jsonify({'success': True, 'message': message})
+        else:
+            return jsonify({'success': False, 'message': 'Lỗi xử lý lời mời'})
+    except Exception as e:
+        app_logger.error(f"Lỗi accept/decline invite: {e}")
         return jsonify({'success': False, 'message': f'Lỗi: {str(e)}'})
 
 

@@ -32,7 +32,7 @@
         <div id="login-form" class="{{ 'hidden' if show_register else '' }}">
             <h2><i class="fas fa-comments"></i> Đăng nhập</h2>
             <form method="POST" action="/login">
-                <input type="text" name="username" placeholder="Tên đăng nhập hoặc email" required>
+                <input type="text" name="username" placeholder="Tên đăng nhập hoặc số điện thoại" required>
                 <input type="password" name="password" placeholder="Mật khẩu" required>
                 <button type="submit" class="btn-login">Đăng nhập</button>
             </form>
@@ -51,7 +51,7 @@
             <form method="POST" action="/register">
                 <input type="text" name="username" placeholder="Tên đăng nhập" required>
                 <input type="text" name="fullname" placeholder="Họ và tên" required>
-                <input type="email" name="email" placeholder="Email" required>
+                <input type="tel" name="phone" placeholder="Số điện thoại" required pattern="[0-9]{10}">
                 <input type="password" name="password" placeholder="Mật khẩu" required>
                 <input type="password" name="confirm_password" placeholder="Xác nhận mật khẩu" required>
                 <button type="submit" class="btn-register">Tạo tài khoản</button>
