@@ -10,46 +10,52 @@ from datetime import datetime, timedelta
 from werkzeug.security import generate_password_hash
 from logger_config import app_logger
 
-def init_db_from_file():
-    # 1. Lấy link database xịn từ Render
+import psycopg2
+import os
+import time
+
+
+def init_db():
+    # 1. Lấy link kết nối từ biến môi trường Render
     db_url = os.environ.get('DATABASE_URL')
-    if not db_url:
-        print("Lỗi: Không tìm thấy biến DATABASE_URL trên Render!")
-        return
-
-    # 2. Đường dẫn tới file SQL (nằm cùng thư mục với database.py)
-    sql_file_path = os.path.join(os.path.dirname(__file__), 'SQLQuery1.sql')
-
-    if not os.path.exists(sql_file_path):
-        print(f"Lỗi: Không tìm thấy file {sql_file_path}")
-        return
-
-    conn = None
+    
+    # Xử lý lỗi định dạng link nếu có
+    if db_url and db_url.startswith("postgres://"):
+        db_url = db_url.replace("postgres://", "postgresql://", 1)
+        
+    print("Đang kết nối tới Database...")
+    
     try:
-        # 3. Kết nối tới PostgreSQL của Render
+        # 2. Thiết lập kết nối
         conn = psycopg2.connect(db_url)
         cur = conn.cursor()
         
-        # 4. Đọc file SQL
-        with open(sql_file_path, 'r', encoding='utf-8') as f:
-            sql_script = f.read()
+        # 3. Đọc nội dung file SQLQuery1.sql
+        # File này phải nằm cùng thư mục với database.py
+        sql_file_path = 'SQLQuery1.sql'
         
-        # 5. Chạy toàn bộ file SQL
-        print("Đang đẩy file SQL lên database...")
-        cur.execute(sql_script)
-        
-        conn.commit()
-        cur.close()
-        print("Chúc mừng Tới! Đã khởi tạo database thành công từ file SQL.")
-        
-    except (Exception, psycopg2.DatabaseError) as error:
-        print(f"Lỗi khi chạy file SQL: {error}")
+        if os.path.exists(sql_file_path):
+            with open(sql_file_path, 'r', encoding='utf-8') as f:
+                sql_script = f.read()
+                
+            print(f"Đang thực thi các lệnh trong {sql_file_path}...")
+            # Chạy toàn bộ code SQL
+            cur.execute(sql_script)
+            
+            # Lưu thay đổi
+            conn.commit()
+            print("Chúc mừng Tới! Đã chuyển code SQL sang Database thành công.")
+        else:
+            print(f"Lỗi: Không tìm thấy file {sql_file_path} trong thư mục dự án.")
+
+    except Exception as e:
+        print(f"Có lỗi xảy ra khi chuyển dữ liệu: {e}")
     finally:
-        if conn is not None:
-            conn.close()
+        if 'cur' in locals(): cur.close()
+        if 'conn' in locals(): conn.close()
 
 if __name__ == "__main__":
-    init_db_from_file()
+    init_db()
 class Config:
     def __init__(self):
         # Ưu tiên lấy link PostgreSQL từ Render
@@ -89,37 +95,47 @@ class DatabaseManager:
     @staticmethod
     def execute_query(query, params=None, fetch_one=False, fetch_all=False):
         conn = None
+
         try:
             conn = DatabaseManager.get_db_connection()
-            # Chuyển đổi cú pháp nếu dùng PostgreSQL
+
             if config.database_url:
-                # 1. Thay ? bằng %s cho Postgres
+                # PostgreSQL syntax
                 query = query.replace('?', '%s')
-                # 2. Thay hàm thời gian
                 query = query.replace('GETDATE()', 'CURRENT_TIMESTAMP')
-                # 3. Chuyển tên bảng/cột về chữ thường (Postgres mặc định dùng lowercase)
-                # Lưu ý: Chỉ nên thực hiện nếu bạn thiết kế DB toàn chữ thường
-                query = query.lower() 
 
             cursor = conn.cursor()
-            cursor.execute(query, params) if params else cursor.execute(query)
-            
+
+            if params:
+                cursor.execute(query, params)
+            else:
+                cursor.execute(query)
+
             result = None
+
             if fetch_one:
                 result = cursor.fetchone()
+
             elif fetch_all:
                 result = cursor.fetchall()
+
             else:
                 conn.commit()
                 result = cursor.rowcount
-            
+
             return result
+
         except Exception as e:
             app_logger.error(f"Query execution error: {e}")
-            if conn: conn.rollback()
+
+            if conn:
+                conn.rollback()
+
             raise
+
         finally:
-            if conn: conn.close()
+            if conn:
+                conn.close()
 
     @staticmethod
     def create_user(username, password, full_name, email=None):
@@ -312,25 +328,44 @@ class DatabaseManager:
     @staticmethod
     def column_exists(table, column):
         """Kiểm tra cột tồn tại (Tương thích cả SQL Server & Postgres)"""
+
+        conn = None
+
         try:
             conn = DatabaseManager.get_db_connection()
             cursor = conn.cursor()
-            
-            # Nếu là Postgres (Render), dùng %s. Nếu là SQL Server, dùng ?
+
+            # PostgreSQL dùng %s
+            # SQL Server dùng ?
             placeholder = '%s' if config.database_url else '?'
-            query = f"SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = {placeholder} AND COLUMN_NAME = {placeholder}"
-            
-            # Postgres phân biệt chữ hoa/thường trong metadata, nên dùng .lower()
+
+            query = f"""
+                SELECT 1
+                FROM INFORMATION_SCHEMA.COLUMNS
+                WHERE TABLE_NAME = {placeholder}
+                AND COLUMN_NAME = {placeholder}
+            """
+
+            # PostgreSQL metadata thường lowercase
             table_name = table.lower() if config.database_url else table
             column_name = column.lower() if config.database_url else column
-            
+
             cursor.execute(query, (table_name, column_name))
+
             exists = cursor.fetchone() is not None
-            conn.close()
+
             return exists
+
         except Exception as e:
+
             app_logger.error(f"Column check error: {e}")
+
             return False
+
+        finally:
+
+            if conn:
+                conn.close()
     @staticmethod
     def ensure_user_status_message_column():
         """Đảm bảo cột UserStatusMessage tồn tại (Chuẩn Postgres)"""

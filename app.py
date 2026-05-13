@@ -20,7 +20,8 @@ from io import BytesIO, StringIO
 import database
 import psycopg2
 
-
+with open("SQLQuery1.sql", "r", encoding="utf-8") as f:
+    sql = f.read()
 # Hàm này sẽ chạy NGAY LẬP TỨC khi app khởi động
 # Trong file app.py
 def force_init_db():
@@ -53,7 +54,6 @@ def force_init_db():
         print(f"--- LỖI DB: {e} ---")
 # Load environment variables from .env file
 load_dotenv()
-from database import init_db_from_file
 
 # Gọi ngay trước khi chạy app
 
@@ -2838,9 +2838,7 @@ def analytics_export():
         app_logger.error(f"Lỗi analytics export: {e}")
         return jsonify({'success': False, 'message': f'Lỗi: {str(e)}'})
 
-if __name__ == "__main__":
-    init_db_from_file() # Tự động đẩy SQL lên khi app khởi động
-    app.run()
+
 if __name__ == "__main__":
     import webbrowser
     port = int(os.environ.get("PORT", 8888))
