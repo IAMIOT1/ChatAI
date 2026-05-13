@@ -3168,5 +3168,5 @@ class DatabaseManager:
             return False
 
 # Khởi tạo các bảng cần thiết khi chạy ứng dụng
-    DatabaseManager.ensure_room_participants_table()
-    DatabaseManager.ensure_user_auth_columns()
+DatabaseManager.ensure_room_participants_table()
+DatabaseManager.ensure_user_auth_columns()s
