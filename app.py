@@ -19,6 +19,33 @@ from logger_config import app_logger
 from io import BytesIO, StringIO
 import database
 from database import init_db_from_file
+import psycopg2
+
+
+# Hàm này sẽ chạy NGAY LẬP TỨC khi app khởi động
+def force_init_db():
+    db_url = os.environ.get('DATABASE_URL')
+    if db_url and db_url.startswith("postgres://"):
+        db_url = db_url.replace("postgres://", "postgresql://", 1)
+    
+    try:
+        conn = psycopg2.connect(db_url)
+        cur = conn.cursor()
+        
+        # Đọc file SQL và chạy trực tiếp
+        if os.path.exists('SQLQuery1.sql'):
+            with open('SQLQuery1.sql', 'r', encoding='utf-8') as f:
+                sql_script = f.read()
+                cur.execute(sql_script)
+                conn.commit()
+                print("--- ĐÃ TẠO BẢNG THÀNH CÔNG TỪ FILE SQL ---")
+        cur.close()
+        conn.close()
+    except Exception as e:
+        print(f"--- LỖI KHỞI TẠO DB: {e} ---")
+
+# Gọi hàm ngay tại đây
+force_init_db()
 
 # Load environment variables from .env file
 load_dotenv()
