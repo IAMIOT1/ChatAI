@@ -36,10 +36,10 @@ class DatabaseManager:
     @staticmethod
     def get_db_connection():
         try:
-            # Nếu có DATABASE_URL -> Dùng PostgreSQL (Render)
             if config.database_url:
+                # Kết nối PostgreSQL (Render)
                 return psycopg2.connect(config.database_url)
-            # Nếu không -> Dùng SQL Server (Máy nhà)
+            # Kết nối SQL Server (Máy nhà)
             return pyodbc.connect(config.conn_str)
         except Exception as e:
             app_logger.error(f"Database connection error: {e}")
@@ -47,12 +47,18 @@ class DatabaseManager:
 
     @staticmethod
     def execute_query(query, params=None, fetch_one=False, fetch_all=False):
+        conn = None
         try:
             conn = DatabaseManager.get_db_connection()
-            # PostgreSQL dùng %s thay vì ?, ta cần xử lý nếu đang ở Render
+            # Chuyển đổi cú pháp nếu dùng PostgreSQL
             if config.database_url:
-                query = query.replace('?', '%s').replace('GETDATE()', 'CURRENT_TIMESTAMP')
-                query = query.replace('SCOPE_IDENTITY()', 'LASTVAL()') # PostgreSQL tương đương
+                # 1. Thay ? bằng %s cho Postgres
+                query = query.replace('?', '%s')
+                # 2. Thay hàm thời gian
+                query = query.replace('GETDATE()', 'CURRENT_TIMESTAMP')
+                # 3. Chuyển tên bảng/cột về chữ thường (Postgres mặc định dùng lowercase)
+                # Lưu ý: Chỉ nên thực hiện nếu bạn thiết kế DB toàn chữ thường
+                query = query.lower() 
 
             cursor = conn.cursor()
             cursor.execute(query, params) if params else cursor.execute(query)
@@ -66,61 +72,58 @@ class DatabaseManager:
                 conn.commit()
                 result = cursor.rowcount
             
-            conn.close()
             return result
         except Exception as e:
             app_logger.error(f"Query execution error: {e}")
+            if conn: conn.rollback()
             raise
-    
-    @staticmethod
-    def create_user(username, password, full_name, email=None):
-        """Create new user"""
-        try:
-            query = """
-                INSERT INTO Users (Username, Password, FullName, Email, Status, CreatedAt)
-                VALUES (?, ?, ?, ?, 'Offline', GETDATE())
-            """
-            params = (username, generate_password_hash(password), full_name, email)
-            return DatabaseManager.execute_query(query, params)
-        except Exception as e:
-            app_logger.error(f"User creation error: {e}")
-            raise
-    
-    @staticmethod
-    def get_user_by_phone(phone):
-        """Get user by phone number"""
-        try:
-            DatabaseManager.ensure_phone_column()
-            query = "SELECT UserID, Username, Password, FullName, Phone, Status FROM Users WHERE Phone = ?"
-            return DatabaseManager.execute_query(query, (phone,), fetch_one=True)
-        except Exception as e:
-            app_logger.error(f"Get user by phone error: {e}")
-            return None
+        finally:
+            if conn: conn.close()
 
     @staticmethod
-    def get_user_by_username(username):
-        """Get user by username"""
+    def create_user(username, password, full_name, email=None):
+        # Dùng chữ thường cho bảng/cột để Postgres không báo lỗi 'relation does not exist'
+        query = """
+            INSERT INTO users (username, password, fullname, email, status, createdat)
+            VALUES (?, ?, ?, ?, 'Offline', GETDATE())
+        """
+        params = (username, generate_password_hash(password), full_name, email)
+        return DatabaseManager.execute_query(query, params)
+    @staticmethod
+    def get_user_by_phone(phone):
+        """Lấy thông tin người dùng bằng số điện thoại (Chuẩn PostgreSQL)"""
         try:
-            query = "SELECT UserID, Username, Password, FullName, Email, Status FROM Users WHERE Username = ?"
-            return DatabaseManager.execute_query(query, (username,), fetch_one=True)
+            # Đảm bảo cột phone đã tồn tại (nếu bạn có hàm khởi tạo tự động)
+            # DatabaseManager.ensure_phone_column() 
+
+            # Lưu ý: PostgreSQL phân biệt chữ hoa chữ thường, nên dùng chữ thường cho bảng 'users' và cột 'phone'
+            query = "SELECT userid, username, password, fullname, phone, status FROM users WHERE phone = ?"
+            
+            # Hàm execute_query phía trên sẽ tự đổi '?' thành '%s' và 'users' thành lowercase nếu cần
+            return DatabaseManager.execute_query(query, (phone,), fetch_one=True)
         except Exception as e:
-            app_logger.error(f"Get user by username error: {e}")
+            app_logger.error(f"Lỗi khi lấy user theo số điện thoại: {e}")
             return None
-    
+    @staticmethod
+    def get_user_by_username(username):
+        query = "SELECT userid, username, password, fullname, email, status FROM users WHERE username = ?"
+        return DatabaseManager.execute_query(query, (username,), fetch_one=True)
+
     @staticmethod
     def save_message(user_id, content, msg_type='Text', room_id=1, reply_to_message_id=None):
-        """Save message to database"""
         try:
-            DatabaseManager.ensure_reply_column()
+            # Luôn kiểm tra/đảm bảo cột tồn tại trước (hàm này cũng phải sửa sang Postgres)
+            DatabaseManager.ensure_reply_column() 
+            
             if reply_to_message_id:
                 query = """
-                    INSERT INTO Messages (RoomID, SenderID, Content, MessageType, IsRead, SentAt, ReplyToMessageID)
+                    INSERT INTO messages (roomid, senderid, content, messagetype, isread, sentat, replytomessageid)
                     VALUES (?, ?, ?, ?, 0, GETDATE(), ?)
                 """
                 params = (room_id, user_id, content, msg_type, reply_to_message_id)
             else:
                 query = """
-                    INSERT INTO Messages (RoomID, SenderID, Content, MessageType, IsRead, SentAt)
+                    INSERT INTO messages (roomid, senderid, content, messagetype, isread, sentat)
                     VALUES (?, ?, ?, ?, 0, GETDATE())
                 """
                 params = (room_id, user_id, content, msg_type)
@@ -131,54 +134,51 @@ class DatabaseManager:
     
     @staticmethod
     def get_room_messages(room_id, limit=50):
-        """Get messages for a room"""
+        """Lấy tin nhắn trong phòng (Tương thích Postgres & SQL Server)"""
         try:
             DatabaseManager.ensure_reply_column()
+            # Sử dụng cú pháp SQL tiêu chuẩn, LIMIT sẽ được xử lý nếu cần
+            # Lưu ý: Bỏ 'TOP {}' vì Postgres không hiểu, ta sẽ dùng LIMIT ở cuối
             query = """
-                SELECT TOP {} m.MessageID, m.Content, m.MessageType, m.SentAt, m.IsRead,
-                       u.Username as SenderName, u.UserID as SenderID, m.ReplyToMessageID
-                FROM Messages m
-                JOIN Users u ON m.SenderID = u.UserID
-                WHERE m.RoomID = ? AND m.IsDeleted = 0
-                ORDER BY m.SentAt DESC
+                SELECT m.messageid, m.content, m.messagetype, m.sentat, m.isread,
+                       u.username as sendername, u.userid as senderid, m.replytomessageid
+                FROM messages m
+                JOIN users u ON m.senderid = u.userid
+                WHERE m.roomid = ? AND m.isdeleted = 0
+                ORDER BY m.sentat DESC
+                LIMIT {}
             """.format(limit)
+            
+            # Nếu chạy SQL Server máy nhà, bạn có thể cần đổi LIMIT ngược lại thành TOP 
+            # nhưng tốt nhất là dùng LIMIT vì Postgres trên Render là ưu tiên.
             messages = DatabaseManager.execute_query(query, (room_id,), fetch_all=True)
             return messages
         except Exception as e:
             app_logger.error(f"Get room messages error: {e}")
             return []
-    
+
     @staticmethod
     def get_analytics_data(export_type):
-        """Get analytics data for export"""
+        """Lấy dữ liệu thống kê để xuất file"""
         try:
+            # Chuyển hết tên bảng về chữ thường để tránh lỗi trên Postgres
             if export_type == 'users':
-                query = """
-                    SELECT UserID, Username, FullName, Email, Status, CreatedAt
-                    FROM Users
-                    ORDER BY CreatedAt DESC
-                """
+                query = "SELECT userid, username, fullname, email, status, createdat FROM users ORDER BY createdat DESC"
             elif export_type == 'messages':
                 query = """
-                    SELECT m.MessageID, m.Content, m.MessageType, m.SentAt,
-                           u.Username as SenderName
-                    FROM Messages m
-                    JOIN Users u ON m.SenderID = u.UserID
-                    ORDER BY m.SentAt DESC
+                    SELECT m.messageid, m.content, m.messagetype, m.sentat, u.username as sendername
+                    FROM messages m
+                    JOIN users u ON m.senderid = u.userid
+                    ORDER BY m.sentat DESC
                 """
             elif export_type == 'rooms':
-                query = """
-                    SELECT RoomID, RoomName, IsGroup, CreatedAt
-                    FROM Rooms
-                    ORDER BY CreatedAt DESC
-                """
+                query = "SELECT roomid, roomname, isgroup, createdat FROM rooms ORDER BY createdat DESC"
             elif export_type == 'files':
                 query = """
-                    SELECT FileID, FileName, FileType, FileSize, UploadedAt,
-                           u.Username as UploaderName
-                    FROM Files f
-                    JOIN Users u ON f.UploadedBy = u.UserID
-                    ORDER BY f.UploadedAt DESC
+                    SELECT fileid, filename, filetype, filesize, uploadedat, u.username as uploadername
+                    FROM files f
+                    JOIN users u ON f.uploadedby = u.userid
+                    ORDER BY f.uploadedat DESC
                 """
             else:
                 return None
@@ -187,24 +187,22 @@ class DatabaseManager:
         except Exception as e:
             app_logger.error(f"Get analytics data error: {e}")
             return None
-    
+
     @staticmethod
     def ensure_room_participants_table():
-        """Ensure RoomParticipants table exists"""
+        """Đảm bảo bảng RoomParticipants tồn tại (Chuẩn PostgreSQL)"""
         try:
-            app_logger.info(f"Checking/creating RoomParticipants table")
+            app_logger.info(f"Checking/creating roomparticipants table")
+            # Postgres dùng 'CREATE TABLE IF NOT EXISTS', không dùng BEGIN/END/OBJECT_ID
             query = """
-                CREATE TABLE IF NOT EXISTS('RoomParticipants', 'U') IS NULL
-                BEGIN
-                    CREATE TABLE RoomParticipants (
-                        RoomID INT NOT NULL,
-                        UserID INT NOT NULL,
-                        JoinedAt DATETIME DEFAULT GETDATE(),
-                        PRIMARY KEY (RoomID, UserID),
-                        FOREIGN KEY (RoomID) REFERENCES Rooms(RoomID),
-                        FOREIGN KEY (UserID) REFERENCES Users(UserID)
-                    )
-                END
+                CREATE TABLE IF NOT EXISTS roomparticipants (
+                    roomid INT NOT NULL,
+                    userid INT NOT NULL,
+                    joinedat TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (roomid, userid),
+                    FOREIGN KEY (roomid) REFERENCES rooms(roomid) ON DELETE CASCADE,
+                    FOREIGN KEY (userid) REFERENCES users(userid) ON DELETE CASCADE
+                )
             """
             DatabaseManager.execute_query(query)
             app_logger.info(f"RoomParticipants table checked/created successfully")
@@ -213,111 +211,122 @@ class DatabaseManager:
     
     @staticmethod
     def ensure_user_auth_columns():
-        """Ensure user authentication columns exist"""
+        """Đảm bảo các cột xác thực tồn tại (Chuẩn Postgres)"""
         try:
-            app_logger.info(f"Connecting to database server: {config.db_server}")
             conn = DatabaseManager.get_db_connection()
             cursor = conn.cursor()
             
+            # Định nghĩa các cột theo kiểu dữ liệu Postgres (sẽ tự đổi trong execute_query)
             columns_to_add = [
-                ('Email', "ALTER TABLE Users ADD Email NVARCHAR(255) NULL"),
-                ('IsVerified', "ALTER TABLE Users ADD IsVerified BIT NOT NULL DEFAULT 0"),
-                ('VerificationToken', "ALTER TABLE Users ADD VerificationToken NVARCHAR(255) NULL"),
-                ('OAuthProvider', "ALTER TABLE Users ADD OAuthProvider NVARCHAR(50) NULL"),
-                ('OAuthId', "ALTER TABLE Users ADD OAuthId NVARCHAR(255) NULL"),
-                ('ResetToken', "ALTER TABLE Users ADD ResetToken NVARCHAR(255) NULL"),
-                ('ResetTokenExpiresAt', "ALTER TABLE Users ADD ResetTokenExpiresAt DATETIME NULL")
+                ('email', "ALTER TABLE users ADD COLUMN email VARCHAR(255) NULL"),
+                ('isverified', "ALTER TABLE users ADD COLUMN isverified BOOLEAN NOT NULL DEFAULT FALSE"),
+                ('verificationtoken', "ALTER TABLE users ADD COLUMN verificationtoken VARCHAR(255) NULL"),
+                ('oauthprovider', "ALTER TABLE users ADD COLUMN oauthprovider VARCHAR(50) NULL"),
+                ('oauthid', "ALTER TABLE users ADD COLUMN oauthid VARCHAR(255) NULL"),
+                ('resettoken', "ALTER TABLE users ADD COLUMN resettoken VARCHAR(255) NULL"),
+                ('resettokenexpiresat', "ALTER TABLE users ADD COLUMN resettokenexpiresat TIMESTAMP NULL")
             ]
             
             message_columns_to_add = [
-                ('EditedAt', "ALTER TABLE Messages ADD EditedAt DATETIME NULL")
+                ('editedat', "ALTER TABLE messages ADD COLUMN editedat TIMESTAMP NULL")
             ]
             
-            for column_name, sql in columns_to_add:
-                if not DatabaseManager.column_exists('Users', column_name):
-                    cursor.execute(sql)
-                    app_logger.info(f"Added column {column_name} to Users table")
+            for col, sql in columns_to_add:
+                if not DatabaseManager.column_exists('users', col):
+                    DatabaseManager.execute_query(sql) # Dùng hàm này để tự động replace kiểu dữ liệu
             
-            for column_name, sql in message_columns_to_add:
-                if not DatabaseManager.column_exists('Messages', column_name):
-                    cursor.execute(sql)
-                    app_logger.info(f"Added column {column_name} to Messages table")
-            
+            for col, sql in message_columns_to_add:
+                if not DatabaseManager.column_exists('messages', col):
+                    DatabaseManager.execute_query(sql)
+                    
             conn.commit()
             conn.close()
         except Exception as e:
-            app_logger.error(f"Column check error: {e}")
-    
+            app_logger.error(f"Auth columns check error: {e}")
+
+    @staticmethod
+    def ensure_last_seen_column():
+        try:
+            if not DatabaseManager.column_exists('users', 'lastseenat'):
+                query = "ALTER TABLE users ADD COLUMN lastseenat TIMESTAMP NULL"
+                DatabaseManager.execute_query(query)
+        except Exception as e:
+            app_logger.error(f"Error adding LastSeenAt column: {e}")
+
+    @staticmethod
+    def update_user_status(user_id, status):
+        """Cập nhật trạng thái và thời gian hoạt động cuối"""
+        try:
+            DatabaseManager.ensure_last_seen_column()
+            if status == 'Online':
+                # GETDATE() sẽ được execute_query đổi thành CURRENT_TIMESTAMP trên Render
+                query = "UPDATE users SET status = ?, lastseenat = GETDATE() WHERE userid = ?"
+                return DatabaseManager.execute_query(query, (status, user_id))
+            else:
+                query = "UPDATE users SET status = ? WHERE userid = ?"
+                return DatabaseManager.execute_query(query, (status, user_id))
+        except Exception as e:
+            app_logger.error(f"Update user status error: {e}")
+            return 0
     @staticmethod
     def column_exists(table, column):
-        """Check if column exists in table"""
+        """Kiểm tra cột tồn tại (Tương thích cả SQL Server & Postgres)"""
         try:
             conn = DatabaseManager.get_db_connection()
             cursor = conn.cursor()
-            cursor.execute("SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = ? AND COLUMN_NAME = ?", (table, column))
+            
+            # Nếu là Postgres (Render), dùng %s. Nếu là SQL Server, dùng ?
+            placeholder = '%s' if config.database_url else '?'
+            query = f"SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = {placeholder} AND COLUMN_NAME = {placeholder}"
+            
+            # Postgres phân biệt chữ hoa/thường trong metadata, nên dùng .lower()
+            table_name = table.lower() if config.database_url else table
+            column_name = column.lower() if config.database_url else column
+            
+            cursor.execute(query, (table_name, column_name))
             exists = cursor.fetchone() is not None
             conn.close()
             return exists
         except Exception as e:
             app_logger.error(f"Column check error: {e}")
             return False
-    
-    @staticmethod
-    def ensure_last_seen_column():
-        """Ensure LastSeenAt column exists in Users table"""
-        try:
-            if not DatabaseManager.column_exists('Users', 'LastSeenAt'):
-                query = "ALTER TABLE Users ADD LastSeenAt DATETIME NULL"
-                DatabaseManager.execute_query(query)
-                app_logger.info("Added LastSeenAt column to Users table")
-        except Exception as e:
-            app_logger.error(f"Error adding LastSeenAt column: {e}")
-
     @staticmethod
     def ensure_user_status_message_column():
-        """Ensure UserStatusMessage column exists in Users table"""
+        """Đảm bảo cột UserStatusMessage tồn tại (Chuẩn Postgres)"""
         try:
-            if not DatabaseManager.column_exists('Users', 'UserStatusMessage'):
-                query = "ALTER TABLE Users ADD UserStatusMessage NVARCHAR(200) NULL"
+            # Postgres dùng chữ thường 'userstatusmessage' và kiểu VARCHAR
+            if not DatabaseManager.column_exists('users', 'userstatusmessage'):
+                query = "ALTER TABLE users ADD COLUMN userstatusmessage VARCHAR(200) NULL"
                 DatabaseManager.execute_query(query)
-                app_logger.info("Added UserStatusMessage column to Users table")
+                app_logger.info("Đã thêm cột userstatusmessage vào bảng users")
         except Exception as e:
-            app_logger.error(f"Error adding UserStatusMessage column: {e}")
-
-    @staticmethod
-    def update_user_status(user_id, status):
-        """Update user status and last seen"""
-        try:
-            DatabaseManager.ensure_last_seen_column()
-            if status == 'Online':
-                query = "UPDATE Users SET Status = ?, LastSeenAt = GETDATE() WHERE UserID = ?"
-            else:
-                query = "UPDATE Users SET Status = ? WHERE UserID = ?"
-            return DatabaseManager.execute_query(query, (status, user_id))
-        except Exception as e:
-            app_logger.error(f"Update user status error: {e}")
-            return 0
+            app_logger.error(f"Lỗi khi thêm cột userstatusmessage: {e}")
     
     @staticmethod
     def get_user_profile(user_id):
-        """Get user profile"""
+        """Lấy thông tin cá nhân (Tương thích Postgres & SQL Server)"""
         try:
+            # Luôn kiểm tra các cột cần thiết trước
             DatabaseManager.ensure_phone_column()
             DatabaseManager.ensure_last_seen_column()
+            
+            # Sử dụng chữ thường cho bảng 'users' và các cột
             query = """
-                SELECT FullName, Username, Phone, Status, LastSeenAt
-                FROM Users
-                WHERE UserID = ?
+                SELECT fullname, username, phone, status, lastseenat
+                FROM users
+                WHERE userid = ?
             """
             user = DatabaseManager.execute_query(query, (user_id,), fetch_one=True)
+            
             if user:
                 return {
-                    'full_name': user[0],
-                    'username': user[1],
-                    'phone': user[2],
-                    'status': user[3],
+                    'full_name': user[0] if user[0] else '',
+                    'username': user[1] if user[1] else '',
+                    'phone': user[2] if user[2] else '',
+                    'status': user[3] if user[3] else 'Offline',
                     'last_seen': user[4].strftime('%Y-%m-%d %H:%M:%S') if user[4] else None
                 }
+            
             return {
                 'full_name': '',
                 'username': '',
@@ -328,21 +337,22 @@ class DatabaseManager:
         except Exception as e:
             app_logger.error(f"Get user profile error: {e}")
             return {
-                'full_name': '',
-                'username': '',
-                'phone': '',
-                'status': 'Offline',
-                'last_seen': None
+                'full_name': '', 'username': '', 'phone': '',
+                'status': 'Offline', 'last_seen': None
             }
 
     @staticmethod
     def get_user_last_seen(user_id):
-        """Get last seen time for a user"""
+        """Lấy thời gian hoạt động cuối cùng"""
         try:
             DatabaseManager.ensure_last_seen_column()
-            query = "SELECT LastSeenAt FROM Users WHERE UserID = ?"
+            query = "SELECT lastseenat FROM users WHERE userid = ?"
             result = DatabaseManager.execute_query(query, (user_id,), fetch_one=True)
+            
             if result and result[0]:
+                # Xử lý trường hợp result[0] đã là string hoặc object datetime
+                if isinstance(result[0], str):
+                    return result[0]
                 return result[0].strftime('%Y-%m-%d %H:%M:%S')
             return None
         except Exception as e:
@@ -351,10 +361,11 @@ class DatabaseManager:
 
     @staticmethod
     def set_user_status_message(user_id, status_message):
-        """Set user status message"""
+        """Cập nhật dòng trạng thái (Status Message)"""
         try:
             DatabaseManager.ensure_user_status_message_column()
-            query = "UPDATE Users SET UserStatusMessage = ? WHERE UserID = ?"
+            # Đảm bảo dùng đúng tên cột chữ thường đã tạo ở hàm ensure trước đó
+            query = "UPDATE users SET userstatusmessage = ? WHERE userid = ?"
             return DatabaseManager.execute_query(query, (status_message, user_id))
         except Exception as e:
             app_logger.error(f"Set user status message error: {e}")
@@ -362,10 +373,11 @@ class DatabaseManager:
 
     @staticmethod
     def get_user_status_message(user_id):
-        """Get user status message"""
+        """Lấy dòng trạng thái của người dùng"""
         try:
             DatabaseManager.ensure_user_status_message_column()
-            query = "SELECT UserStatusMessage FROM Users WHERE UserID = ?"
+            # Chuyển UserStatusMessage và Users về chữ thường
+            query = "SELECT userstatusmessage FROM users WHERE userid = ?"
             result = DatabaseManager.execute_query(query, (user_id,), fetch_one=True)
             return result[0] if result and result[0] else ''
         except Exception as e:
@@ -374,9 +386,11 @@ class DatabaseManager:
     
     @staticmethod
     def get_user_by_email(email):
-        """Get user by email"""
+        """Tìm người dùng qua email (Tương thích Postgres)"""
         try:
-            query = "SELECT UserID, Username, Password, FullName, Email, Status FROM Users WHERE Email = ?"
+            # Đảm bảo cột email tồn tại trước khi truy vấn
+            DatabaseManager.ensure_user_auth_columns()
+            query = "SELECT userid, username, password, fullname, email, status FROM users WHERE email = ?"
             return DatabaseManager.execute_query(query, (email,), fetch_one=True)
         except Exception as e:
             app_logger.error(f"Get user by email error: {e}")
@@ -384,9 +398,9 @@ class DatabaseManager:
     
     @staticmethod
     def username_exists(username):
-        """Check if username exists"""
+        """Kiểm tra username đã tồn tại chưa"""
         try:
-            query = "SELECT 1 FROM Users WHERE Username = ?"
+            query = "SELECT 1 FROM users WHERE username = ?"
             result = DatabaseManager.execute_query(query, (username,), fetch_one=True)
             return result is not None
         except Exception as e:
@@ -395,25 +409,27 @@ class DatabaseManager:
     
     @staticmethod
     def get_unread_counts(user_id):
-        """Get unread message counts for user"""
+        """Lấy số lượng tin nhắn chưa đọc"""
         try:
+            # Chuyển đổi các cột IsRead, RoomID, SenderID về chữ thường
             query = """
-                SELECT RoomID, COUNT(*) AS UnreadCount
-                FROM Messages
-                WHERE RoomID IS NOT NULL AND IsRead = 0 AND SenderID != ?
-                GROUP BY RoomID
+                SELECT roomid, COUNT(*) AS unreadcount
+                FROM messages
+                WHERE roomid IS NOT NULL AND isread = 0 AND senderid != ?
+                GROUP BY roomid
             """
             rows = DatabaseManager.execute_query(query, (user_id,), fetch_all=True)
-            return {row[0]: row[1] for row in rows}
+            return {row[0]: row[1] for row in rows} if rows else {}
         except Exception as e:
             app_logger.error(f"Get unread counts error: {e}")
             return {}
     
     @staticmethod
     def get_user_by_oauth(provider, oauth_id):
-        """Get user by OAuth provider and ID"""
+        """Lấy người dùng qua OAuth (Tương thích Postgres)"""
         try:
-            query = "SELECT UserID, FullName, Username, Email FROM Users WHERE OAuthProvider = ? AND OAuthId = ?"
+            # Chuyển tên cột và bảng về chữ thường
+            query = "SELECT userid, fullname, username, email FROM users WHERE oauthprovider = ? AND oauthid = ?"
             return DatabaseManager.execute_query(query, (provider, oauth_id), fetch_one=True)
         except Exception as e:
             app_logger.error(f"Get user by OAuth error: {e}")
@@ -421,7 +437,7 @@ class DatabaseManager:
     
     @staticmethod
     def create_oauth_user(provider, oauth_id, email, full_name):
-        """Create OAuth user"""
+        """Tạo người dùng OAuth mới"""
         try:
             import secrets
             from werkzeug.security import generate_password_hash
@@ -430,63 +446,54 @@ class DatabaseManager:
             username = DatabaseManager.generate_unique_username(username_base)
             password_hash = generate_password_hash(secrets.token_urlsafe(16))
             
+            # Chú ý: IsVerified BIT -> BOOLEAN (1 -> TRUE)
             query = """
-                INSERT INTO Users (Username, FullName, Email, Password, Status, IsVerified, OAuthProvider, OAuthId)
-                VALUES (?, ?, ?, ?, 'Offline', 1, ?, ?)
+                INSERT INTO users (username, fullname, email, password, status, isverified, oauthprovider, oauthid)
+                VALUES (?, ?, ?, ?, 'Offline', TRUE, ?, ?)
             """
             DatabaseManager.execute_query(query, (username, full_name, email, password_hash, provider, oauth_id))
             
-            # Get the created user
             return DatabaseManager.get_user_by_oauth(provider, oauth_id)
         except Exception as e:
             app_logger.error(f"Create OAuth user error: {e}")
             return None
-    
-    @staticmethod
-    def generate_unique_username(base):
-        """Generate unique username"""
-        if not base:
-            base = 'user'
-        base = ''.join(ch for ch in base if ch.isalnum()).lower() or 'user'
-        candidate = base
-        suffix = 1
-        while DatabaseManager.username_exists(candidate):
-            candidate = f"{base}{suffix}"
-            suffix += 1
-        return candidate
-    
+
     @staticmethod
     def get_group_rooms(user_id):
-        """Get group rooms for user"""
+        """Lấy danh sách nhóm (Sử dụng LATERAL cho PostgreSQL)"""
         try:
+            # Sử dụng LEFT JOIN LATERAL thay cho OUTER APPLY
+            # Sử dụng LIMIT 1 thay cho TOP 1
             query = """
-                SELECT r.RoomID,
-                       r.RoomName,
-                       r.GroupAvatar,
-                       COALESCE(last.LastMessage, 'Chưa có tin nhắn') AS LastMessage,
-                       last.LastSentAt,
-                       COALESCE(unread.UnreadCount, 0) AS UnreadCount
-                FROM Rooms r
-                OUTER APPLY (
-                    SELECT TOP 1 CASE WHEN MessageType = 'Image' THEN '[Ảnh]' ELSE Content END AS LastMessage,
-                                   SentAt AS LastSentAt
-                    FROM Messages m
-                    WHERE m.RoomID = r.RoomID
-                    ORDER BY SentAt DESC
-                ) last
+                SELECT r.roomid,
+                       r.roomname,
+                       r.groupavatar,
+                       COALESCE(last_msg.content_display, 'Chưa có tin nhắn') AS lastmessage,
+                       last_msg.sentat AS lastsentat,
+                       COALESCE(unread.unreadcount, 0) AS unreadcount
+                FROM rooms r
+                LEFT JOIN LATERAL (
+                    SELECT CASE WHEN messagetype = 'Image' THEN '[Ảnh]' ELSE content END AS content_display,
+                           sentat
+                    FROM messages m
+                    WHERE m.roomid = r.roomid
+                    ORDER BY sentat DESC
+                    LIMIT 1
+                ) last_msg ON TRUE
                 LEFT JOIN (
-                    SELECT RoomID, COUNT(*) AS UnreadCount
-                    FROM Messages
-                    WHERE IsRead = 0 AND SenderID != ?
-                    GROUP BY RoomID
-                ) unread ON unread.RoomID = r.RoomID
-                WHERE r.IsGroup = 1
-                ORDER BY last.LastSentAt DESC
+                    SELECT roomid, COUNT(*) AS unreadcount
+                    FROM messages
+                    WHERE isread = 0 AND senderid != ?
+                    GROUP BY roomid
+                ) unread ON unread.roomid = r.roomid
+                WHERE r.isgroup = 1
+                ORDER BY last_msg.sentat DESC NULLS LAST
             """
             rows = DatabaseManager.execute_query(query, (user_id,), fetch_all=True)
             rooms = []
             for row in rows:
-                last_sent = row[4].strftime('%H:%M') if row[4] else ''
+                # row[4] là lastsentat (TIMESTAMP)
+                last_sent = row[4].strftime('%H:%M') if row[4] and hasattr(row[4], 'strftime') else ''
                 rooms.append({
                     'room_id': row[0],
                     'room_name': row[1],
@@ -499,43 +506,77 @@ class DatabaseManager:
         except Exception as e:
             app_logger.error(f"Get group rooms error: {e}")
             return []
+    @staticmethod
+    def generate_unique_username(base):
+        """
+        Tạo username duy nhất (Tương thích Postgres & SQL Server)
+        """
+        try:
+            if not base:
+                base = 'user'
+            
+            # 1. Làm sạch base: Loại bỏ ký tự đặc biệt, chuyển về chữ thường
+            # Postgres phân biệt chữ hoa/thường nên dùng lowercase là an toàn nhất
+            base = ''.join(ch for ch in base if ch.isalnum()).lower()
+            if not base:
+                base = 'user'
+                
+            candidate = base
+            suffix = 1
+            
+            # 2. Vòng lặp kiểm tra sự tồn tại
+            # Hàm DatabaseManager.username_exists đã được tối ưu ở trên sẽ xử lý việc query
+            while DatabaseManager.username_exists(candidate):
+                candidate = f"{base}{suffix}"
+                suffix += 1
+            
+            return candidate
+        except Exception as e:
+            app_logger.error(f"Lỗi khi tạo username duy nhất: {e}")
+            # Nếu lỗi, trả về một username ngẫu nhiên kèm timestamp để tránh crash app
+            import time
+            return f"user_{int(time.time())}"
     
     @staticmethod
     def get_private_rooms(user_id):
-        """Get private rooms for user"""
+        """Lấy danh sách phòng chat cá nhân (Tương thích Postgres)"""
         try:
+            # Thay OUTER APPLY bằng LEFT JOIN LATERAL
+            # Thay TOP 1 bằng LIMIT 1
+            # Viết thường tên bảng và cột
             query = """
-                  SELECT r.RoomID,
-                      r.RoomName,
-                      u.UserID AS OtherUserID,
-                      u.FullName AS OtherUserName,
-                       COALESCE(last.LastMessage, 'Chưa có tin nhắn') AS LastMessage,
-                       last.LastSentAt,
-                       COALESCE(unread.UnreadCount, 0) AS UnreadCount
-                FROM Rooms r
-                JOIN RoomParticipants rp2 ON rp2.RoomID = r.RoomID AND rp2.UserID = ?
-                JOIN RoomParticipants rp ON rp.RoomID = r.RoomID AND rp.UserID != ?
-                JOIN Users u ON u.UserID = rp.UserID
-                OUTER APPLY (
-                    SELECT TOP 1 CASE WHEN MessageType = 'Image' THEN '[Ảnh]' ELSE Content END AS LastMessage,
-                                   SentAt AS LastSentAt
-                    FROM Messages m
-                    WHERE m.RoomID = r.RoomID
-                    ORDER BY SentAt DESC
-                ) last
+                SELECT r.roomid,
+                       r.roomname,
+                       u.userid AS otheruserid,
+                       u.fullname AS otherusername,
+                       COALESCE(last_msg.content_display, 'Chưa có tin nhắn') AS lastmessage,
+                       last_msg.sentat AS lastsentat,
+                       COALESCE(unread.unreadcount, 0) AS unreadcount
+                FROM rooms r
+                JOIN roomparticipants rp2 ON rp2.roomid = r.roomid AND rp2.userid = ?
+                JOIN roomparticipants rp ON rp.roomid = r.roomid AND rp.userid != ?
+                JOIN users u ON u.userid = rp.userid
+                LEFT JOIN LATERAL (
+                    SELECT CASE WHEN messagetype = 'Image' THEN '[Ảnh]' ELSE content END AS content_display,
+                           sentat
+                    FROM messages m
+                    WHERE m.roomid = r.roomid
+                    ORDER BY sentat DESC
+                    LIMIT 1
+                ) last_msg ON TRUE
                 LEFT JOIN (
-                    SELECT RoomID, COUNT(*) AS UnreadCount
-                    FROM Messages
-                    WHERE IsRead = 0 AND SenderID != ?
-                    GROUP BY RoomID
-                ) unread ON unread.RoomID = r.RoomID
-                WHERE r.IsGroup = 0
-                ORDER BY last.LastSentAt DESC
+                    SELECT roomid, COUNT(*) AS unreadcount
+                    FROM messages
+                    WHERE isread = 0 AND senderid != ?
+                    GROUP BY roomid
+                ) unread ON unread.roomid = r.roomid
+                WHERE r.isgroup = 0
+                ORDER BY last_msg.sentat DESC NULLS LAST
             """
             rows = DatabaseManager.execute_query(query, (user_id, user_id, user_id), fetch_all=True)
             rooms = []
             for row in rows:
-                last_sent = row[5].strftime('%H:%M') if row[5] else ''
+                last_sent = row[5].strftime('%H:%M') if row[5] and hasattr(row[5], 'strftime') else ''
                 rooms.append({
                     'room_id': row[0],
                     'room_name': row[1],
@@ -549,25 +590,22 @@ class DatabaseManager:
         except Exception as e:
             app_logger.error(f"Get private rooms error: {e}")
             return []
-    
+
     @staticmethod
     def create_group_room(user_id, group_name):
-        """Create a new group room"""
+        """Tạo phòng nhóm mới (Tương thích Postgres)"""
         if not group_name or not group_name.strip():
             return None
         try:
-            # Insert room
-            query = "INSERT INTO Rooms (RoomName, IsGroup) VALUES (?, 1)"
-            DatabaseManager.execute_query(query, (group_name.strip(),))
-            
-            # Get the room ID
-            query = "SELECT CAST(SCOPE_IDENTITY() AS INT) AS RoomID"
-            row = DatabaseManager.execute_query(query, fetch_one=True)
+            # 1. Chèn phòng mới và lấy ID ngay lập tức bằng RETURNING
+            # IsGroup 1 (BIT) -> TRUE (BOOLEAN)
+            query = "INSERT INTO rooms (roomname, isgroup) VALUES (?, TRUE) RETURNING roomid"
+            row = DatabaseManager.execute_query(query, (group_name.strip(),), fetch_one=True)
             room_id = row[0] if row else None
             
             if room_id:
-                # Add user to room
-                query = "INSERT INTO RoomParticipants (RoomID, UserID) VALUES (?, ?)"
+                # 2. Thêm người tạo vào phòng
+                query = "INSERT INTO roomparticipants (roomid, userid) VALUES (?, ?)"
                 DatabaseManager.execute_query(query, (room_id, user_id))
             
             return room_id
@@ -577,7 +615,7 @@ class DatabaseManager:
     
     @staticmethod
     def get_or_create_private_room(user_id, target_user_id):
-        """Get or create private room between two users"""
+        """Lấy hoặc tạo phòng chat riêng (Tương thích Postgres)"""
         try:
             user_id = int(user_id)
             target_user_id = int(target_user_id)
@@ -591,72 +629,70 @@ class DatabaseManager:
         room_name = f"private_{first_id}_{second_id}"
         
         try:
-            # Check if room exists
-            query = "SELECT RoomID FROM Rooms WHERE IsGroup = 0 AND RoomName = ?"
+            # 1. Kiểm tra phòng tồn tại (Dùng chữ thường cho bảng/cột)
+            query = "SELECT roomid FROM rooms WHERE isgroup = FALSE AND roomname = ?"
             existing = DatabaseManager.execute_query(query, (room_name,), fetch_one=True)
             
             if existing:
                 room_id = existing[0]
             else:
-                # Create new room
-                query = "INSERT INTO Rooms (RoomName, IsGroup) VALUES (?, 0)"
-                DatabaseManager.execute_query(query, (room_name,))
-                
-                query = "SELECT CAST(SCOPE_IDENTITY() AS INT)"
-                row = DatabaseManager.execute_query(query, fetch_one=True)
+                # 2. Tạo phòng mới và lấy ID ngay lập tức bằng RETURNING
+                query = "INSERT INTO rooms (roomname, isgroup) VALUES (?, FALSE) RETURNING roomid"
+                row = DatabaseManager.execute_query(query, (room_name,), fetch_one=True)
                 room_id = int(row[0]) if row and row[0] is not None else None
             
             if room_id is None:
-                raise ValueError('Could not get RoomID when creating private room')
+                raise ValueError('Could not get roomid when creating private room')
             
-            # Add participants
+            # 3. Thêm thành viên (Dùng bảng roomparticipants)
             for participant_id in (user_id, target_user_id):
-                query = "SELECT 1 FROM RoomParticipants WHERE RoomID = ? AND UserID = ?"
-                if not DatabaseManager.execute_query(query, (room_id, participant_id), fetch_one=True):
-                    query = "INSERT INTO RoomParticipants(RoomID, UserID) VALUES (?, ?)"
-                    DatabaseManager.execute_query(query, (room_id, participant_id))
+                check_query = "SELECT 1 FROM roomparticipants WHERE roomid = ? AND userid = ?"
+                if not DatabaseManager.execute_query(check_query, (room_id, participant_id), fetch_one=True):
+                    insert_query = "INSERT INTO roomparticipants (roomid, userid) VALUES (?, ?)"
+                    DatabaseManager.execute_query(insert_query, (room_id, participant_id))
             
-            # Get target user name
-            query = "SELECT FullName FROM Users WHERE UserID = ?"
+            # 4. Lấy tên người nhận
+            query = "SELECT fullname FROM users WHERE userid = ?"
             target_user = DatabaseManager.execute_query(query, (target_user_id,), fetch_one=True)
             target_name = target_user[0] if target_user else f"User {target_user_id}"
             
-            return room_id, f"Chat with {target_name}"
+            return room_id, f"Chat với {target_name}"
         except Exception as e:
             app_logger.error(f"Get or create private room error: {e}")
             return None
-    
+
     @staticmethod
     def get_analytics_data(export_type):
-        """Get analytics data for export"""
+        """Lấy dữ liệu thống kê (Tương thích Postgres)"""
         try:
+            # PostgreSQL yêu cầu tên bảng/cột chính xác (viết thường là an toàn nhất)
             if export_type == 'users':
                 query = """
-                    SELECT UserID, FullName, Username, Email, Status, CreatedAt
-                    FROM Users
-                    ORDER BY CreatedAt DESC
+                    SELECT userid, fullname, username, email, status, createdat
+                    FROM users
+                    ORDER BY createdat DESC
                 """
             elif export_type == 'messages':
                 query = """
-                    SELECT m.MessageID, m.Content, m.MessageType, m.SentAt,
-                           u.Username as SenderName
-                    FROM Messages m
-                    JOIN Users u ON m.SenderID = u.UserID
-                    ORDER BY m.SentAt DESC
+                    SELECT m.messageid, m.content, m.messagetype, m.sentat,
+                           u.username as sendername
+                    FROM messages m
+                    JOIN users u ON m.senderid = u.userid
+                    ORDER BY m.sentat DESC
                 """
             elif export_type == 'rooms':
                 query = """
-                    SELECT RoomID, RoomName, IsGroup, CreatedAt
-                    FROM Rooms
-                    ORDER BY CreatedAt DESC
+                    SELECT roomid, roomname, isgroup, createdat
+                    FROM rooms
+                    ORDER BY createdat DESC
                 """
             elif export_type == 'files':
                 query = """
-                    SELECT f.FileID, f.FileName, f.FileType, f.FileSize, f.UploadedAt,
-                           u.Username as Uploader
-                    FROM SharedFiles f
-                    JOIN Users u ON f.UploaderID = u.UserID
-                    ORDER BY f.UploadedAt DESC
+                    SELECT f.fileid, f.filename, f.filetype, f.filesize, f.uploadedat,
+                           u.username as uploader
+                    FROM sharedfiles f
+                    JOIN users u ON f.uploaderid = u.userid
+                    ORDER BY f.uploadedat DESC
                 """
             else:
                 return None
@@ -668,17 +704,21 @@ class DatabaseManager:
     
     @staticmethod
     def get_room_messages(room_id, limit=100):
-        """Get messages for a room"""
+        """Lấy danh sách tin nhắn trong phòng (Tương thích Postgres)"""
         try:
+            # Chuyển tên bảng Messages -> messages, Users -> users
+            # Chuyển tên cột về chữ thường
             query = """
-                SELECT m.MessageID, m.SenderID, u.FullName as SenderName, m.Content, m.MessageType,
-                       m.SentAt, m.IsRead, m.EditedAt, m.IsDeleted, m.DeletedAt
-                FROM Messages m
-                JOIN Users u ON m.SenderID = u.UserID
-                WHERE m.RoomID = ? AND (m.IsDeleted IS NULL OR m.IsDeleted = 0)
-                ORDER BY m.SentAt ASC
+                SELECT m.messageid, m.senderid, u.fullname as sendername, m.content, m.messagetype,
+                       m.sentat, m.isread, m.editedat, m.isdeleted, m.deletedat
+                FROM messages m
+                JOIN users u ON m.senderid = u.userid
+                WHERE m.roomid = ? AND (m.isdeleted IS NULL OR m.isdeleted = FALSE)
+                ORDER BY m.sentat ASC
+                LIMIT ?
             """
-            messages = DatabaseManager.execute_query(query, (room_id,), fetch_all=True)
+            # Thêm biến limit vào truy vấn để tối ưu hiệu năng
+            messages = DatabaseManager.execute_query(query, (room_id, limit), fetch_all=True)
             
             result = []
             for msg in messages:
@@ -701,9 +741,10 @@ class DatabaseManager:
     
     @staticmethod
     def mark_messages_as_read(room_id, user_id):
-        """Mark messages as read in a room"""
+        """Đánh dấu tin nhắn đã đọc"""
         try:
-            query = "UPDATE Messages SET IsRead = 1 WHERE RoomID = ? AND SenderID != ? AND IsRead = 0"
+            # isread = 1 -> isread = TRUE (hoặc vẫn dùng 0/1 nếu execute_query hỗ trợ chuyển đổi)
+            query = "UPDATE messages SET isread = TRUE WHERE roomid = ? AND senderid != ? AND isread = FALSE"
             return DatabaseManager.execute_query(query, (room_id, user_id))
         except Exception as e:
             app_logger.error(f"Mark messages as read error: {e}")
@@ -711,17 +752,18 @@ class DatabaseManager:
     
     @staticmethod
     def edit_message(message_id, user_id, new_content):
-        """Edit a message"""
+        """Chỉnh sửa tin nhắn (Sử dụng CURRENT_TIMESTAMP cho Postgres)"""
         try:
-            # Check permission
-            query = "SELECT SenderID FROM Messages WHERE MessageID = ?"
+            # Kiểm tra quyền sở hữu tin nhắn
+            query = "SELECT senderid FROM messages WHERE messageid = ?"
             message = DatabaseManager.execute_query(query, (message_id,), fetch_one=True)
             
             if not message or message[0] != user_id:
                 return False
             
-            # Update message
-            query = "UPDATE Messages SET Content = ?, EditedAt = GETDATE() WHERE MessageID = ?"
+            # Cập nhật nội dung và thời gian sửa đổi
+            # Đổi GETDATE() thành CURRENT_TIMESTAMP
+            query = "UPDATE messages SET content = ?, editedat = CURRENT_TIMESTAMP WHERE messageid = ?"
             DatabaseManager.execute_query(query, (new_content, message_id))
             return True
         except Exception as e:
@@ -730,17 +772,17 @@ class DatabaseManager:
     
     @staticmethod
     def delete_message(message_id, user_id):
-        """Delete a message (soft delete)"""
+        """Xóa tin nhắn (Xóa tạm - Soft delete)"""
         try:
-            # Check permission
-            query = "SELECT SenderID FROM Messages WHERE MessageID = ?"
+            # Kiểm tra quyền sở hữu tin nhắn
+            query = "SELECT senderid FROM messages WHERE messageid = ?"
             message = DatabaseManager.execute_query(query, (message_id,), fetch_one=True)
             
             if not message or message[0] != user_id:
                 return False
             
-            # Soft delete message
-            query = "UPDATE Messages SET IsDeleted = 1, DeletedAt = GETDATE() WHERE MessageID = ?"
+            # Thực hiện xóa tạm: Đổi IsDeleted = 1 thành TRUE, GETDATE() thành CURRENT_TIMESTAMP
+            query = "UPDATE messages SET isdeleted = TRUE, deletedat = CURRENT_TIMESTAMP WHERE messageid = ?"
             DatabaseManager.execute_query(query, (message_id,))
             return True
         except Exception as e:
@@ -748,21 +790,25 @@ class DatabaseManager:
             return False
     
     @staticmethod
-    def search(query, user_id):
-        """Search for groups and users"""
+    def search(query_str, user_id):
+        """Tìm kiếm nhóm và người dùng"""
         try:
             DatabaseManager.ensure_phone_column()
-            pattern = f"%{query}%"
+            pattern = f"%{query_str}%"
             results = []
             
-            # Search groups
-            query_sql = "SELECT RoomID, RoomName FROM Rooms WHERE IsGroup = 1 AND RoomName LIKE ?"
+            # Tìm kiếm nhóm: IsGroup = 1 thành TRUE
+            query_sql = "SELECT roomid, roomname FROM rooms WHERE isgroup = TRUE AND roomname LIKE ?"
             groups = DatabaseManager.execute_query(query_sql, (pattern,), fetch_all=True)
             for group in groups:
                 results.append({'id': group[0], 'type': 'Group', 'name': group[1]})
             
-            # Search users by phone, fullname, or username
-            query_sql = "SELECT UserID, FullName, Username, Phone FROM Users WHERE UserID != ? AND (Phone LIKE ? OR FullName LIKE ? OR Username LIKE ?)"
+            # Tìm kiếm người dùng qua số điện thoại, tên hoặc username
+            query_sql = """
+                SELECT userid, fullname, username, phone 
+                FROM users 
+                WHERE userid != ? AND (phone LIKE ? OR fullname LIKE ? OR username LIKE ?)
+            """
             users = DatabaseManager.execute_query(query_sql, (user_id, pattern, pattern, pattern), fetch_all=True)
             for user in users:
                 results.append({'id': user[0], 'type': 'User', 'name': user[1], 'phone': user[3]})
@@ -774,34 +820,36 @@ class DatabaseManager:
     
     @staticmethod
     def update_user_profile(user_id, fullname, username, avatar_url=None, phone=None):
-        """Update user profile"""
+        """Cập nhật thông tin cá nhân"""
         try:
             DatabaseManager.ensure_phone_column()
-            # Update basic info
-            query = "UPDATE Users SET FullName = ?, Username = ? WHERE UserID = ?"
+            # Cập nhật thông tin cơ bản
+            query = "UPDATE users SET fullname = ?, username = ? WHERE userid = ?"
             DatabaseManager.execute_query(query, (fullname, username, user_id))
             
-            # Update avatar if provided
+            # Cập nhật ảnh đại diện nếu có
             if avatar_url:
-                query = "UPDATE Users SET AvatarUrl = ? WHERE UserID = ?"
+                query = "UPDATE users SET avatarurl = ? WHERE userid = ?"
                 DatabaseManager.execute_query(query, (avatar_url, user_id))
             
-            # Update phone if provided
+            # Cập nhật số điện thoại nếu có
             if phone:
-                query = "UPDATE Users SET Phone = ? WHERE UserID = ?"
+                query = "UPDATE users SET phone = ? WHERE userid = ?"
                 DatabaseManager.execute_query(query, (phone, user_id))
             
             return True
         except Exception as e:
             app_logger.error(f"Update user profile error: {e}")
             return False
-    
+
+
     @staticmethod
     def check_user_exists(username, phone):
-        """Check if user already exists by username or phone"""
+        """Kiểm tra người dùng đã tồn tại qua username hoặc số điện thoại"""
         try:
             DatabaseManager.ensure_phone_column()
-            query = "SELECT 1 FROM Users WHERE Username = ? OR Phone = ?"
+            # Sử dụng chữ thường cho tên bảng và cột
+            query = "SELECT 1 FROM users WHERE username = ? OR phone = ?"
             result = DatabaseManager.execute_query(query, (username, phone), fetch_one=True)
             return result is not None
         except Exception as e:
@@ -810,22 +858,21 @@ class DatabaseManager:
     
     @staticmethod
     def register_user(username, fullname, phone, password, verification_token=None, is_verified=False):
-        """Register a new user"""
+        """Đăng ký người dùng mới (Tương thích Postgres)"""
         try:
             from werkzeug.security import generate_password_hash
             hashed_password = generate_password_hash(password)
             
-            # Ensure Phone column exists
             DatabaseManager.ensure_phone_column()
             
-            # Debug log
-            app_logger.info(f"Registering user: username={username}, phone={phone}, password_hash={hashed_password[:20] if hashed_password else None}..., is_verified={is_verified}")
+            app_logger.info(f"Registering user: username={username}, phone={phone}")
             
+            # Chuyển đổi 1/0 thành TRUE/FALSE cho kiểu BOOLEAN của Postgres
             query = """
-                INSERT INTO Users (Username, FullName, Phone, Password, Status, IsVerified, VerificationToken)
+                INSERT INTO users (username, fullname, phone, password, status, isverified, verificationtoken)
                 VALUES (?, ?, ?, ?, 'Offline', ?, ?)
             """
-            DatabaseManager.execute_query(query, (username, fullname, phone, hashed_password, 1 if is_verified else 0, verification_token))
+            DatabaseManager.execute_query(query, (username, fullname, phone, hashed_password, is_verified, verification_token))
             return True
         except Exception as e:
             app_logger.error(f"Register user error: {e}")
@@ -833,47 +880,52 @@ class DatabaseManager:
     
     @staticmethod
     def ensure_phone_column():
-        """Ensure Phone column exists in Users table"""
+        """Đảm bảo cột phone tồn tại trong bảng users"""
         try:
-            if not DatabaseManager.column_exists('Users', 'Phone'):
-                query = "ALTER TABLE Users ADD Phone NVARCHAR(20) NULL"
+            # PostgreSQL dùng VARCHAR thay cho NVARCHAR
+            if not DatabaseManager.column_exists('users', 'phone'):
+                query = "ALTER TABLE users ADD COLUMN phone VARCHAR(20) NULL"
                 DatabaseManager.execute_query(query)
-                app_logger.info("Added Phone column to Users table")
+                app_logger.info("Added phone column to users table")
         except Exception as e:
             app_logger.error(f"Ensure phone column error: {e}")
 
     @staticmethod
     def ensure_shared_files_table():
-        """Ensure SharedFiles table exists"""
+        """Khởi tạo bảng sharedfiles nếu chưa có (Chuẩn Postgres)"""
         try:
-            if not DatabaseManager.column_exists('SharedFiles', 'FileID'):
+            # Kiểm tra sự tồn tại của bảng sharedfiles
+            if not DatabaseManager.table_exists('sharedfiles'):
                 query = """
-                    CREATE TABLE SharedFiles (
-                        FileID INT IDENTITY(1,1) PRIMARY KEY,
-                        FileName NVARCHAR(255) NOT NULL,
-                        OriginalFileName NVARCHAR(255) NOT NULL,
-                        FilePath NVARCHAR(500) NOT NULL,
-                        FileType NVARCHAR(50) NOT NULL,
-                        FileSize INT NOT NULL,
-                        UploadedBy INT NOT NULL,
-                        UploadedAt DATETIME DEFAULT GETDATE(),
-                        RoomID INT NULL,
-                        FOREIGN KEY (UploadedBy) REFERENCES Users(UserID),
-                        FOREIGN KEY (RoomID) REFERENCES Rooms(RoomID)
+                    CREATE TABLE sharedfiles (
+                        fileid SERIAL PRIMARY KEY,
+                        filename VARCHAR(255) NOT NULL,
+                        originalfilename VARCHAR(255) NOT NULL,
+                        filepath VARCHAR(500) NOT NULL,
+                        filetype VARCHAR(50) NOT NULL,
+                        filesize INT NOT NULL,
+                        uploaderid INT NOT NULL,
+                        uploadedat TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        roomid INT NULL,
+                        CONSTRAINT fk_uploader FOREIGN KEY (uploaderid) REFERENCES users(userid),
+                        CONSTRAINT fk_room FOREIGN KEY (roomid) REFERENCES rooms(roomid)
                     )
                 """
                 DatabaseManager.execute_query(query)
+                app_logger.info("Created sharedfiles table")
         except Exception as e:
             app_logger.error(f"Ensure shared files table error: {e}")
     
     @staticmethod
     def upload_file(unique_filename, original_filename, file_url, file_type, file_size, user_id, room_id=None):
-        """Upload file information to database"""
+        """Lưu thông tin file vào database (Tương thích Postgres)"""
         try:
             DatabaseManager.ensure_shared_files_table()
             
+            # Chuyển tên bảng/cột về chữ thường
+            # Đổi UploadedBy thành uploaderid để đồng bộ với hàm ensure_shared_files_table
             query = """
-                INSERT INTO SharedFiles (FileName, OriginalFileName, FilePath, FileType, FileSize, UploadedBy, RoomID)
+                INSERT INTO sharedfiles (filename, originalfilename, filepath, filetype, filesize, uploaderid, roomid)
                 VALUES (?, ?, ?, ?, ?, ?, ?)
             """
             DatabaseManager.execute_query(query, (unique_filename, original_filename, file_url, file_type, file_size, user_id, room_id))
@@ -884,12 +936,12 @@ class DatabaseManager:
     
     @staticmethod
     def get_file_info(file_id):
-        """Get file information by ID"""
+        """Lấy thông tin file theo ID"""
         try:
             query = """
-                SELECT FileName, OriginalFileName, FilePath, FileType, FileSize, UploadedBy
-                FROM SharedFiles
-                WHERE FileID = ?
+                SELECT filename, originalfilename, filepath, filetype, filesize, uploaderid
+                FROM sharedfiles
+                WHERE fileid = ?
             """
             return DatabaseManager.execute_query(query, (file_id,), fetch_one=True)
         except Exception as e:
@@ -898,35 +950,37 @@ class DatabaseManager:
     
     @staticmethod
     def get_analytics_overview():
-        """Get analytics overview statistics"""
+        """Lấy số liệu thống kê tổng quan (Chuẩn PostgreSQL)"""
         try:
             stats = {}
             
-            # User statistics
-            stats['total_users'] = DatabaseManager.execute_query("SELECT COUNT(*) as Total FROM Users", fetch_one=True)[0]
-            stats['new_users_today'] = DatabaseManager.execute_query("SELECT COUNT(*) as NewUsers FROM Users WHERE CAST(CreatedAt AS DATE) = CAST(GETDATE() AS DATE)", fetch_one=True)[0]
-            stats['new_users_week'] = DatabaseManager.execute_query("SELECT COUNT(*) as NewUsers FROM Users WHERE CAST(CreatedAt AS DATE) >= DATEADD(day, -7, GETDATE())", fetch_one=True)[0]
-            stats['new_users_month'] = DatabaseManager.execute_query("SELECT COUNT(*) as NewUsers FROM Users WHERE CAST(CreatedAt AS DATE) >= DATEADD(day, -30, GETDATE())", fetch_one=True)[0]
+            # 1. Thống kê User
+            stats['total_users'] = DatabaseManager.execute_query("SELECT COUNT(*) FROM users", fetch_one=True)[0]
+            # Postgres dùng CURRENT_DATE thay cho CAST(GETDATE() AS DATE)
+            stats['new_users_today'] = DatabaseManager.execute_query("SELECT COUNT(*) FROM users WHERE createdat::date = CURRENT_DATE", fetch_one=True)[0]
+            # Postgres dùng toán tử INTERVAL thay cho DATEADD
+            stats['new_users_week'] = DatabaseManager.execute_query("SELECT COUNT(*) FROM users WHERE createdat >= CURRENT_DATE - INTERVAL '7 days'", fetch_one=True)[0]
+            stats['new_users_month'] = DatabaseManager.execute_query("SELECT COUNT(*) FROM users WHERE createdat >= CURRENT_DATE - INTERVAL '30 days'", fetch_one=True)[0]
             
-            # Message statistics
-            stats['total_messages'] = DatabaseManager.execute_query("SELECT COUNT(*) as Total FROM Messages", fetch_one=True)[0]
-            stats['messages_today'] = DatabaseManager.execute_query("SELECT COUNT(*) as Today FROM Messages WHERE CAST(SentAt AS DATE) = CAST(GETDATE() AS DATE)", fetch_one=True)[0]
-            stats['messages_week'] = DatabaseManager.execute_query("SELECT COUNT(*) as Week FROM Messages WHERE CAST(SentAt AS DATE) >= DATEADD(day, -7, GETDATE())", fetch_one=True)[0]
-            stats['messages_month'] = DatabaseManager.execute_query("SELECT COUNT(*) as Month FROM Messages WHERE CAST(SentAt AS DATE) >= DATEADD(day, -30, GETDATE())", fetch_one=True)[0]
+            # 2. Thống kê Tin nhắn
+            stats['total_messages'] = DatabaseManager.execute_query("SELECT COUNT(*) FROM messages", fetch_one=True)[0]
+            stats['messages_today'] = DatabaseManager.execute_query("SELECT COUNT(*) FROM messages WHERE sentat::date = CURRENT_DATE", fetch_one=True)[0]
+            stats['messages_week'] = DatabaseManager.execute_query("SELECT COUNT(*) FROM messages WHERE sentat >= CURRENT_DATE - INTERVAL '7 days'", fetch_one=True)[0]
+            stats['messages_month'] = DatabaseManager.execute_query("SELECT COUNT(*) FROM messages WHERE sentat >= CURRENT_DATE - INTERVAL '30 days'", fetch_one=True)[0]
             
-            # Room statistics
-            stats['total_rooms'] = DatabaseManager.execute_query("SELECT COUNT(*) as Total FROM Rooms", fetch_one=True)[0]
-            stats['total_groups'] = DatabaseManager.execute_query("SELECT COUNT(*) as Groups FROM Rooms WHERE IsGroup = 1", fetch_one=True)[0]
-            stats['new_rooms_today'] = DatabaseManager.execute_query("SELECT COUNT(*) as NewRooms FROM Rooms WHERE CAST(CreatedAt AS DATE) = CAST(GETDATE() AS DATE)", fetch_one=True)[0]
+            # 3. Thống kê Phòng
+            stats['total_rooms'] = DatabaseManager.execute_query("SELECT COUNT(*) FROM rooms", fetch_one=True)[0]
+            stats['total_groups'] = DatabaseManager.execute_query("SELECT COUNT(*) FROM rooms WHERE isgroup = TRUE", fetch_one=True)[0]
+            stats['new_rooms_today'] = DatabaseManager.execute_query("SELECT COUNT(*) FROM rooms WHERE createdat::date = CURRENT_DATE", fetch_one=True)[0]
             
-            # File statistics
-            stats['total_files'] = DatabaseManager.execute_query("SELECT COUNT(*) as Total FROM SharedFiles", fetch_one=True)[0]
-            stats['files_today'] = DatabaseManager.execute_query("SELECT COUNT(*) as Today FROM SharedFiles WHERE CAST(UploadedAt AS DATE) = CAST(GETDATE() AS DATE)", fetch_one=True)[0]
-            result = DatabaseManager.execute_query("SELECT SUM(FileSize) as TotalSize FROM SharedFiles", fetch_one=True)
-            stats['total_file_size'] = result[0] if result[0] else 0
+            # 4. Thống kê File
+            stats['total_files'] = DatabaseManager.execute_query("SELECT COUNT(*) FROM sharedfiles", fetch_one=True)[0]
+            stats['files_today'] = DatabaseManager.execute_query("SELECT COUNT(*) FROM sharedfiles WHERE uploadedat::date = CURRENT_DATE", fetch_one=True)[0]
+            result = DatabaseManager.execute_query("SELECT SUM(filesize) FROM sharedfiles", fetch_one=True)
+            stats['total_file_size'] = result[0] if result and result[0] else 0
             
-            # Online users
-            stats['online_users'] = DatabaseManager.execute_query("SELECT COUNT(*) as Online FROM Users WHERE Status = 'Online'", fetch_one=True)[0]
+            # 5. Người dùng trực tuyến
+            stats['online_users'] = DatabaseManager.execute_query("SELECT COUNT(*) FROM users WHERE status = 'Online'", fetch_one=True)[0]
             
             return stats
         except Exception as e:
@@ -935,36 +989,39 @@ class DatabaseManager:
     
     @staticmethod
     def get_analytics_user_activity(days=30):
-        """Get user activity analytics"""
+        """Lấy dữ liệu hoạt động của người dùng (Tương thích Postgres)"""
         try:
-            # User activity by date
+            # 1. Người dùng mới theo ngày
+            # Postgres dùng ::date và CURRENT_DATE - INTERVAL
             query = """
-                SELECT CAST(CreatedAt AS DATE) as Date, COUNT(*) as NewUsers
-                FROM Users
-                WHERE CAST(CreatedAt AS DATE) >= DATEADD(day, -?, GETDATE())
-                GROUP BY CAST(CreatedAt AS DATE)
-                ORDER BY Date DESC
+                SELECT createdat::date as date, COUNT(*) as newusers
+                FROM users
+                WHERE createdat >= CURRENT_DATE - (? || ' days')::interval
+                GROUP BY createdat::date
+                ORDER BY date DESC
             """
             user_activity = DatabaseManager.execute_query(query, (days,), fetch_all=True)
             
-            # Message activity by date
+            # 2. Số lượng tin nhắn theo ngày
             query = """
-                SELECT CAST(SentAt AS DATE) as Date, COUNT(*) as MessageCount
-                FROM Messages
-                WHERE CAST(SentAt AS DATE) >= DATEADD(day, -?, GETDATE())
-                GROUP BY CAST(SentAt AS DATE)
-                ORDER BY Date DESC
+                SELECT sentat::date as date, COUNT(*) as messagecount
+                FROM messages
+                WHERE sentat >= CURRENT_DATE - (? || ' days')::interval
+                GROUP BY sentat::date
+                ORDER BY date DESC
             """
             message_activity = DatabaseManager.execute_query(query, (days,), fetch_all=True)
             
-            # Top 10 active users
+            # 3. Top 10 người dùng tích cực nhất
+            # Đổi TOP 10 thành LIMIT 10 ở cuối câu lệnh
             query = """
-                SELECT TOP 10 u.FullName, COUNT(m.MessageID) as MessageCount
-                FROM Users u
-                LEFT JOIN Messages m ON u.UserID = m.SenderID
-                WHERE m.SentAt >= DATEADD(day, -?, GETDATE())
-                GROUP BY u.UserID, u.FullName
-                ORDER BY MessageCount DESC
+                SELECT u.fullname, COUNT(m.messageid) as messagecount
+                FROM users u
+                LEFT JOIN messages m ON u.userid = m.senderid
+                WHERE m.sentat >= CURRENT_DATE - (? || ' days')::interval
+                GROUP BY u.userid, u.fullname
+                ORDER BY messagecount DESC
+                LIMIT 10
             """
             top_users = DatabaseManager.execute_query(query, (days,), fetch_all=True)
             
@@ -979,36 +1036,38 @@ class DatabaseManager:
     
     @staticmethod
     def get_analytics_room_stats(days=30):
-        """Get room statistics analytics"""
+        """Lấy số liệu thống kê phòng chat (Tương thích Postgres)"""
         try:
-            # Top 10 active rooms
+            # 1. Top 10 phòng chat tích cực
             query = """
-                SELECT TOP 10 r.RoomName, COUNT(m.MessageID) as MessageCount,
-                       COUNT(DISTINCT m.SenderID) as ActiveUsers
-                FROM Rooms r
-                LEFT JOIN Messages m ON r.RoomID = m.RoomID
-                WHERE m.SentAt >= DATEADD(day, -?, GETDATE())
-                GROUP BY r.RoomID, r.RoomName
-                ORDER BY MessageCount DESC
+                SELECT r.roomname, COUNT(m.messageid) as messagecount,
+                       COUNT(DISTINCT m.senderid) as activeusers
+                FROM rooms r
+                LEFT JOIN messages m ON r.roomid = m.roomid
+                WHERE m.sentat >= CURRENT_DATE - (? || ' days')::interval
+                GROUP BY r.roomid, r.roomname
+                ORDER BY messagecount DESC
+                LIMIT 10
             """
             top_rooms = DatabaseManager.execute_query(query, (days,), fetch_all=True)
             
-            # Room type statistics
+            # 2. Thống kê loại phòng (Nhóm vs Cá nhân)
+            # isgroup là kiểu BOOLEAN trên Postgres
             query = """
-                SELECT CASE WHEN IsGroup = 1 THEN 'Group' ELSE 'Private' END as RoomType,
-                       COUNT(*) as Count
-                FROM Rooms
-                GROUP BY IsGroup
+                SELECT CASE WHEN isgroup = TRUE THEN 'Group' ELSE 'Private' END as roomtype,
+                       COUNT(*) as count
+                FROM rooms
+                GROUP BY isgroup
             """
             room_types = DatabaseManager.execute_query(query, fetch_all=True)
             
-            # Room creation by date
+            # 3. Số phòng mới tạo theo ngày
             query = """
-                SELECT CAST(CreatedAt AS DATE) as Date, COUNT(*) as NewRooms
-                FROM Rooms
-                WHERE CAST(CreatedAt AS DATE) >= DATEADD(day, -?, GETDATE())
-                GROUP BY CAST(CreatedAt AS DATE)
-                ORDER BY Date DESC
+                SELECT createdat::date as date, COUNT(*) as newrooms
+                FROM rooms
+                WHERE createdat >= CURRENT_DATE - (? || ' days')::interval
+                GROUP BY createdat::date
+                ORDER BY date DESC
             """
             room_creation = DatabaseManager.execute_query(query, (days,), fetch_all=True)
             
@@ -1023,38 +1082,42 @@ class DatabaseManager:
     
     @staticmethod
     def get_analytics_file_stats(days=30):
-        """Get file statistics analytics"""
+        """Lấy số liệu thống kê về tệp tin (Tương thích Postgres)"""
         try:
-            # File statistics by type
+            # 1. Thống kê theo loại tệp
+            # Postgres dùng INTERVAL thay cho DATEADD
             query = """
-                SELECT FileType, COUNT(*) as Count, SUM(FileSize) as TotalSize
-                FROM SharedFiles
-                WHERE UploadedAt >= DATEADD(day, -?, GETDATE())
-                GROUP BY FileType
-                ORDER BY Count DESC
+                SELECT filetype, COUNT(*) as count, SUM(filesize) as totalsize
+                FROM sharedfiles
+                WHERE uploadedat >= CURRENT_DATE - (? || ' days')::interval
+                GROUP BY filetype
+                ORDER BY count DESC
             """
             file_types = DatabaseManager.execute_query(query, (days,), fetch_all=True)
             
-            # File uploads by date
+            # 2. Lượng upload theo ngày
+            # Postgres dùng ::date thay cho CAST(... AS DATE)
             query = """
-                SELECT CAST(UploadedAt AS DATE) as Date, COUNT(*) as FileCount,
-                       SUM(FileSize) as TotalSize
-                FROM SharedFiles
-                WHERE CAST(UploadedAt AS DATE) >= DATEADD(day, -?, GETDATE())
-                GROUP BY CAST(UploadedAt AS DATE)
-                ORDER BY Date DESC
+                SELECT uploadedat::date as date, COUNT(*) as filecount,
+                       SUM(filesize) as totalsize
+                FROM sharedfiles
+                WHERE uploadedat::date >= CURRENT_DATE - (? || ' days')::interval
+                GROUP BY uploadedat::date
+                ORDER BY date DESC
             """
             file_uploads = DatabaseManager.execute_query(query, (days,), fetch_all=True)
             
-            # Top 10 uploaders
+            # 3. Top 10 người tải lên nhiều nhất
+            # Đổi TOP 10 thành LIMIT 10 ở cuối và dùng uploaderid
             query = """
-                SELECT TOP 10 u.FullName, COUNT(sf.FileID) as FileCount,
-                       SUM(sf.FileSize) as TotalSize
-                FROM Users u
-                LEFT JOIN SharedFiles sf ON u.UserID = sf.UploadedBy
-                WHERE sf.UploadedAt >= DATEADD(day, -?, GETDATE())
-                GROUP BY u.UserID, u.FullName
-                ORDER BY FileCount DESC
+                SELECT u.fullname, COUNT(sf.fileid) as filecount,
+                       SUM(sf.filesize) as totalsize
+                FROM users u
+                LEFT JOIN sharedfiles sf ON u.userid = sf.uploaderid
+                WHERE sf.uploadedat >= CURRENT_DATE - (? || ' days')::interval
+                GROUP BY u.userid, u.fullname
+                ORDER BY filecount DESC
+                LIMIT 10
             """
             top_uploaders = DatabaseManager.execute_query(query, (days,), fetch_all=True)
             
@@ -1069,16 +1132,18 @@ class DatabaseManager:
     
     @staticmethod
     def verify_email_token(token):
-        """Verify email token"""
+        """Xác thực token email (Tương thích Postgres)"""
         try:
-            query = "SELECT UserID FROM Users WHERE VerificationToken = ?"
+            # Kiểm tra token trong bảng users
+            query = "SELECT userid FROM users WHERE verificationtoken = ?"
             user = DatabaseManager.execute_query(query, (token,), fetch_one=True)
             
             if not user:
                 return False
             
             user_id = user[0]
-            query = "UPDATE Users SET IsVerified = 1, VerificationToken = NULL WHERE UserID = ?"
+            # isverified kiểu BOOLEAN trên Postgres -> dùng TRUE
+            query = "UPDATE users SET isverified = TRUE, verificationtoken = NULL WHERE userid = ?"
             DatabaseManager.execute_query(query, (user_id,))
             return True
         except Exception as e:
@@ -1087,9 +1152,10 @@ class DatabaseManager:
     
     @staticmethod
     def set_password_reset_token(email, token, expires_at):
-        """Set password reset token for user"""
+        """Thiết lập token đặt lại mật khẩu cho người dùng"""
         try:
-            query = "UPDATE Users SET ResetToken = ?, ResetTokenExpiresAt = ? WHERE Email = ?"
+            # PostgreSQL yêu cầu tên bảng/cột viết thường
+            query = "UPDATE users SET resettoken = ?, resettokenexpiresat = ? WHERE email = ?"
             DatabaseManager.execute_query(query, (token, expires_at, email))
             return True
         except Exception as e:
@@ -1098,20 +1164,28 @@ class DatabaseManager:
     
     @staticmethod
     def reset_password_with_token(token, new_password):
-        """Reset password using token"""
+        """Đặt lại mật khẩu bằng token (Tương thích Postgres)"""
         try:
             from werkzeug.security import generate_password_hash
             from datetime import datetime
             
-            query = "SELECT UserID, ResetTokenExpiresAt FROM Users WHERE ResetToken = ?"
+            # Lấy thông tin user và thời gian hết hạn
+            query = "SELECT userid, resettokenexpiresat FROM users WHERE resettoken = ?"
             user = DatabaseManager.execute_query(query, (token,), fetch_one=True)
             
+            # Kiểm tra token tồn tại và còn hạn không
             if not user or not user[1] or user[1] < datetime.now():
                 return False
             
             user_id = user[0]
             hashed_password = generate_password_hash(new_password)
-            query = "UPDATE Users SET Password = ?, ResetToken = NULL, ResetTokenExpiresAt = NULL, IsVerified = 1 WHERE UserID = ?"
+            
+            # Cập nhật mật khẩu mới, xóa token và đánh dấu đã xác thực (isverified = TRUE)
+            query = """
+                UPDATE users 
+                SET password = ?, resettoken = NULL, resettokenexpiresat = NULL, isverified = TRUE 
+                WHERE userid = ?
+            """
             DatabaseManager.execute_query(query, (hashed_password, user_id))
             return True
         except Exception as e:
@@ -1120,9 +1194,10 @@ class DatabaseManager:
     
     @staticmethod
     def update_user_oauth(email, provider, oauth_id):
-        """Update user OAuth information"""
+        """Cập nhật thông tin OAuth (Google/Facebook)"""
         try:
-            query = "UPDATE Users SET OAuthProvider = ?, OAuthId = ?, IsVerified = 1 WHERE Email = ?"
+            # Đảm bảo isverified = TRUE cho người dùng đăng nhập qua bên thứ ba
+            query = "UPDATE users SET oauthprovider = ?, oauthid = ?, isverified = TRUE WHERE email = ?"
             DatabaseManager.execute_query(query, (provider, oauth_id, email))
             return True
         except Exception as e:
@@ -1131,13 +1206,14 @@ class DatabaseManager:
     
     @staticmethod
     def get_online_users():
-        """Get list of online users"""
+        """Lấy danh sách người dùng đang trực tuyến (Tương thích Postgres)"""
         try:
+            # Chuyển tên bảng/cột về chữ thường
             query = """
-                SELECT UserID, FullName, Status
-                FROM Users
-                WHERE Status = 'Online'
-                ORDER BY FullName
+                SELECT userid, fullname, status
+                FROM users
+                WHERE status = 'Online'
+                ORDER BY fullname
             """
             users = DatabaseManager.execute_query(query, fetch_all=True)
             return [{'user_id': user[0], 'user_name': user[1], 'status': user[2]} for user in users]
@@ -1147,14 +1223,15 @@ class DatabaseManager:
     
     @staticmethod
     def update_notification_enabled(user_id, enabled):
-        """Update notification enabled status for user"""
+        """Cập nhật trạng thái bật/tắt thông báo cho người dùng"""
         try:
-            # Ensure NotificationEnabled column exists
-            if not DatabaseManager.column_exists('Users', 'NotificationEnabled'):
-                query = "ALTER TABLE Users ADD NotificationEnabled BIT NOT NULL DEFAULT 1"
+            # Kiểm tra và thêm cột notificationenabled nếu chưa có
+            # BIT của SQL Server chuyển thành BOOLEAN của Postgres
+            if not DatabaseManager.column_exists('users', 'notificationenabled'):
+                query = "ALTER TABLE users ADD COLUMN notificationenabled BOOLEAN NOT NULL DEFAULT TRUE"
                 DatabaseManager.execute_query(query)
             
-            query = "UPDATE Users SET NotificationEnabled = ? WHERE UserID = ?"
+            query = "UPDATE users SET notificationenabled = ? WHERE userid = ?"
             DatabaseManager.execute_query(query, (enabled, user_id))
             return True
         except Exception as e:
@@ -1163,32 +1240,38 @@ class DatabaseManager:
     
     @staticmethod
     def ensure_notifications_table():
-        """Ensure Notifications table exists"""
+        """Đảm bảo bảng notifications tồn tại (Chuẩn Postgres)"""
         try:
-            if not DatabaseManager.column_exists('Notifications', 'NotificationID'):
+            if not DatabaseManager.table_exists('notifications'):
+                # IDENTITY(1,1) -> SERIAL
+                # BIT -> BOOLEAN
+                # GETDATE() -> CURRENT_TIMESTAMP
                 query = """
-                    CREATE TABLE Notifications (
-                        NotificationID INT IDENTITY(1,1) PRIMARY KEY,
-                        UserID INT NOT NULL,
-                        Title NVARCHAR(255) NOT NULL,
-                        Message NVARCHAR(1000) NOT NULL,
-                        Type NVARCHAR(50) NOT NULL,
-                        IsRead BIT NOT NULL DEFAULT 0,
-                        CreatedAt DATETIME DEFAULT GETDATE(),
-                        FOREIGN KEY (UserID) REFERENCES Users(UserID)
+                    CREATE TABLE notifications (
+                        notificationid SERIAL PRIMARY KEY,
+                        userid INT NOT NULL,
+                        title VARCHAR(255) NOT NULL,
+                        message TEXT NOT NULL,
+                        type VARCHAR(50) NOT NULL,
+                        isread BOOLEAN NOT NULL DEFAULT FALSE,
+                        createdat TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        CONSTRAINT fk_user_notification FOREIGN KEY (userid) REFERENCES users(userid)
                     )
                 """
                 DatabaseManager.execute_query(query)
+                app_logger.info("Created notifications table")
         except Exception as e:
             app_logger.error(f"Ensure notifications table error: {e}")
     
     @staticmethod
     def create_notification(user_id, title, message, notification_type):
-        """Create a notification"""
+        """Tạo một thông báo mới (Tương thích Postgres)"""
         try:
             DatabaseManager.ensure_notifications_table()
+            
+            # Sử dụng tên bảng/cột viết thường
             query = """
-                INSERT INTO Notifications (UserID, Title, Message, Type)
+                INSERT INTO notifications (userid, title, message, type)
                 VALUES (?, ?, ?, ?)
             """
             DatabaseManager.execute_query(query, (user_id, title, message, notification_type))
@@ -1199,21 +1282,23 @@ class DatabaseManager:
     
     @staticmethod
     def get_user_notifications(user_id):
-        """Get notifications for a user"""
+        """Lấy danh sách thông báo của người dùng"""
         try:
+            # Truy vấn sắp xếp theo thời gian mới nhất
             query = """
-                SELECT NotificationID, Title, Message, Type, IsRead, CreatedAt
-                FROM Notifications
-                WHERE UserID = ?
-                ORDER BY CreatedAt DESC
+                SELECT notificationid, title, message, type, isread, createdat
+                FROM notifications
+                WHERE userid = ?
+                ORDER BY createdat DESC
             """
             notifications = DatabaseManager.execute_query(query, (user_id,), fetch_all=True)
+            
             return [{
                 'notification_id': notif[0],
                 'title': notif[1],
                 'message': notif[2],
                 'type': notif[3],
-                'is_read': bool(notif[4]),
+                'is_read': bool(notif[4]), # PostgreSQL trả về True/False cho kiểu BOOLEAN
                 'created_at': notif[5].strftime('%Y-%m-%d %H:%M:%S') if notif[5] else ''
             } for notif in notifications]
         except Exception as e:
@@ -1222,12 +1307,13 @@ class DatabaseManager:
     
     @staticmethod
     def mark_notification_read(notification_id, user_id):
-        """Mark notification as read"""
+        """Đánh dấu thông báo là đã đọc (Sử dụng chuẩn BOOLEAN)"""
         try:
+            # Chuyển IsRead = 1 (BIT) thành isread = TRUE (BOOLEAN)
             query = """
-                UPDATE Notifications
-                SET IsRead = 1
-                WHERE NotificationID = ? AND UserID = ?
+                UPDATE notifications
+                SET isread = TRUE
+                WHERE notificationid = ? AND userid = ?
             """
             DatabaseManager.execute_query(query, (notification_id, user_id))
             return True
@@ -1237,20 +1323,20 @@ class DatabaseManager:
     
     @staticmethod
     def is_room_admin(room_id, user_id):
-        """Check if user is admin of a room"""
+        """Kiểm tra xem người dùng có phải là Admin của phòng không"""
         try:
-            # Prefer role stored in RoomRoles (newer table)
+            # Ưu tiên kiểm tra trong bảng roomroles (Bảng phân quyền mới)
             DatabaseManager.ensure_room_roles_table()
-            rr_query = "SELECT Role FROM RoomRoles WHERE RoomID = ? AND UserID = ?"
+            rr_query = "SELECT role FROM roomroles WHERE roomid = ? AND userid = ?"
             rr = DatabaseManager.execute_query(rr_query, (room_id, user_id), fetch_one=True)
             if rr and rr[0] == 'Admin':
                 return True
 
-            # Fallback: check RoomParticipants.Role column for backward compatibility
+            # Phương án dự phòng: kiểm tra cột role trong bảng roomparticipants
             query = """
-                SELECT COUNT(*) as IsAdmin
-                FROM RoomParticipants
-                WHERE RoomID = ? AND UserID = ? AND Role = 'Admin'
+                SELECT COUNT(*) 
+                FROM roomparticipants 
+                WHERE roomid = ? AND userid = ? AND role = 'Admin'
             """
             result = DatabaseManager.execute_query(query, (room_id, user_id), fetch_one=True)
             return result[0] > 0 if result else False
@@ -1260,162 +1346,235 @@ class DatabaseManager:
     
     @staticmethod
     def user_exists(user_id):
-        """Check if user exists"""
+        """Kiểm tra sự tồn tại của người dùng qua UserID"""
         try:
-            query = "SELECT COUNT(*) FROM Users WHERE UserID = ?"
+            query = "SELECT COUNT(*) FROM users WHERE userid = ?"
             result = DatabaseManager.execute_query(query, (user_id,), fetch_one=True)
             return result[0] > 0 if result else False
         except Exception as e:
             app_logger.error(f"User exists error: {e}")
             return False
 
-@staticmethod
-def create_notification(user_id, title, message, notification_type):
-    """Create a notification"""
-    try:
-        DatabaseManager.ensure_notifications_table()
-        query = """
-            INSERT INTO Notifications (UserID, Title, Message, Type)
-            VALUES (?, ?, ?, ?)
-        """
-        DatabaseManager.execute_query(query, (user_id, title, message, notification_type))
-        return True
-    except Exception as e:
-        app_logger.error(f"Create notification error: {e}")
-        return False
-
-@staticmethod
-def get_user_notifications(user_id):
-    """Get notifications for a user"""
-    try:
-        query = """
-            SELECT NotificationID, Title, Message, Type, IsRead, CreatedAt
-            FROM Notifications
-            WHERE UserID = ?
-            ORDER BY CreatedAt DESC
-        """
-        notifications = DatabaseManager.execute_query(query, (user_id,), fetch_all=True)
-        return [{
-            'notification_id': notif[0],
-            'title': notif[1],
-            'message': notif[2],
-            'type': notif[3],
-            'is_read': bool(notif[4]),
-            'created_at': notif[5].strftime('%Y-%m-%d %H:%M:%S') if notif[5] else ''
-        } for notif in notifications]
-    except Exception as e:
-        app_logger.error(f"Get user notifications error: {e}")
-        return []
-
-@staticmethod
-def mark_notification_read(notification_id, user_id):
-    """Mark notification as read"""
-    try:
-        query = """
-            UPDATE Notifications
-            SET IsRead = 1
-            WHERE NotificationID = ? AND UserID = ?
-        """
-        DatabaseManager.execute_query(query, (notification_id, user_id))
-        return True
-    except Exception as e:
-        app_logger.error(f"Mark notification read error: {e}")
-        return False
-
-@staticmethod
-def is_room_admin(room_id, user_id):
-    """Check if user is admin of a room"""
-    try:
-        # Prefer role stored in RoomRoles (newer table)
-        DatabaseManager.ensure_room_roles_table()
-        rr_query = "SELECT Role FROM RoomRoles WHERE RoomID = ? AND UserID = ?"
-        rr = DatabaseManager.execute_query(rr_query, (room_id, user_id), fetch_one=True)
-        if rr and rr[0] == 'Admin':
+    @staticmethod
+    def create_notification(user_id, title, message, notification_type):
+        """Tạo một thông báo mới cho người dùng"""
+        try:
+            DatabaseManager.ensure_notifications_table()
+            query = """
+                INSERT INTO notifications (userid, title, message, type)
+                VALUES (?, ?, ?, ?)
+            """
+            DatabaseManager.execute_query(query, (user_id, title, message, notification_type))
             return True
-
-        # Fallback: check RoomParticipants.Role column for backward compatibility
-        query = """
-            SELECT COUNT(*) as IsAdmin
-            FROM RoomParticipants
-            WHERE RoomID = ? AND UserID = ? AND Role = 'Admin'
-        """
-        result = DatabaseManager.execute_query(query, (room_id, user_id), fetch_one=True)
-        return result[0] > 0 if result else False
-    except Exception as e:
-        app_logger.error(f"Is room admin error: {e}")
-        return False
-
-@staticmethod
-def user_exists(user_id):
-    """Check if user exists"""
-    try:
-        query = "SELECT COUNT(*) FROM Users WHERE UserID = ?"
-        result = DatabaseManager.execute_query(query, (user_id,), fetch_one=True)
-        return result[0] > 0 if result else False
-    except Exception as e:
-        app_logger.error(f"User exists error: {e}")
-        return False
-
-@staticmethod
-def save_message(user_id, content, msg_type='Text', room_id=1, reply_to_message_id=None):
-    """Lưu tin nhắn vào database"""
-    try:
-        query = """
-            INSERT INTO Messages (SenderID, Content, MessageType, RoomID, ReplyToMessageID, SentAt, IsRead)
-            VALUES (?, ?, ?, ?, ?, GETDATE(), 0)
-        """
-        DatabaseManager.execute_query(query, (user_id, content, msg_type, room_id, reply_to_message_id))
-        return True
-    except Exception as e:
-        app_logger.error(f"Save message error: {e}")
-        return False
-
-@staticmethod
-def save_forwarded_message(user_id, original_message_id, target_room_id):
-    """Lưu forwarded message vào database"""
-    try:
-        # Get original message
-        original_query = """
-            SELECT Content, MessageType, SenderID
-            FROM Messages
-            WHERE MessageID = ?
-        """
-        original = DatabaseManager.execute_query(original_query, (original_message_id,), fetch_one=True)
-        
-        if not original:
+        except Exception as e:
+            app_logger.error(f"Create notification error: {e}")
             return False
-        
-        content = original[0]
-        msg_type = original[1]
-        original_sender_id = original[2]
-        
-        # Check if ForwardedFromMessageID column exists
-        if not DatabaseManager.column_exists('Messages', 'ForwardedFromMessageID'):
-            query = "ALTER TABLE Messages ADD ForwardedFromMessageID INT NULL"
-            DatabaseManager.execute_query(query)
-        
-        # Insert forwarded message
-        query = """
-            INSERT INTO Messages (SenderID, Content, MessageType, RoomID, ForwardedFromMessageID, SentAt, IsRead)
-            VALUES (?, ?, ?, ?, ?, GETDATE(), 0)
-        """
-        DatabaseManager.execute_query(query, (user_id, content, msg_type, target_room_id, original_message_id))
-        return True
-    except Exception as e:
-        app_logger.error(f"Save forwarded message error: {e}")
-        return False
+
+    @staticmethod
+    def get_user_notifications(user_id):
+        """Lấy danh sách thông báo của người dùng (Tương thích Postgres)"""
+        try:
+            # Chuyển tên bảng/cột về chữ thường để khớp với cấu trúc Postgres
+            query = """
+                SELECT notificationid, title, message, type, isread, createdat
+                FROM notifications
+                WHERE userid = ?
+                ORDER BY createdat DESC
+            """
+            notifications = DatabaseManager.execute_query(query, (user_id,), fetch_all=True)
+            
+            return [{
+                'notification_id': notif[0],
+                'title': notif[1],
+                'message': notif[2],
+                'type': notif[3],
+                # PostgreSQL trả về giá trị True/False cho kiểu BOOLEAN
+                'is_read': bool(notif[4]),
+                'created_at': notif[5].strftime('%Y-%m-%d %H:%M:%S') if notif[5] else ''
+            } for notif in notifications]
+        except Exception as e:
+            app_logger.error(f"Get user notifications error: {e}")
+            return []
+
+    @staticmethod
+    def mark_notification_read(notification_id, user_id):
+        """Đánh dấu thông báo là đã đọc (Chuẩn Postgres BOOLEAN)"""
+        try:
+            # Đổi IsRead = 1 thành isread = TRUE cho phù hợp với PostgreSQL
+            query = """
+                UPDATE notifications
+                SET isread = TRUE
+                WHERE notificationid = ? AND userid = ?
+            """
+            DatabaseManager.execute_query(query, (notification_id, user_id))
+            return True
+        except Exception as e:
+            app_logger.error(f"Mark notification read error: {e}")
+            return False
+
+    @staticmethod
+    def is_room_admin(room_id, user_id):
+        """Kiểm tra quyền Admin của người dùng trong phòng (Tương thích Postgres)"""
+        try:
+            # Đảm bảo bảng roomroles tồn tại
+            DatabaseManager.ensure_room_roles_table()
+            
+            # Kiểm tra trong bảng roomroles (Cấu trúc mới)
+            rr_query = "SELECT role FROM roomroles WHERE roomid = ? AND userid = ?"
+            rr = DatabaseManager.execute_query(rr_query, (room_id, user_id), fetch_one=True)
+            if rr and rr[0] == 'Admin':
+                return True
+
+            # Phương án dự phòng (Fallback): kiểm tra trong bảng roomparticipants
+            query = """
+                SELECT COUNT(*) 
+                FROM roomparticipants 
+                WHERE roomid = ? AND userid = ? AND role = 'Admin'
+            """
+            result = DatabaseManager.execute_query(query, (room_id, user_id), fetch_one=True)
+            return result[0] > 0 if result else False
+        except Exception as e:
+            app_logger.error(f"Is room admin error: {e}")
+            return False
+
+    @staticmethod
+    def user_exists(user_id):
+        """Kiểm tra sự tồn tại của người dùng (Tương thích Postgres)"""
+        try:
+            # PostgreSQL ưu tiên tên bảng và cột viết thường
+            query = "SELECT COUNT(*) FROM users WHERE userid = ?"
+            result = DatabaseManager.execute_query(query, (user_id,), fetch_one=True)
+            return result[0] > 0 if result else False
+        except Exception as e:
+            app_logger.error(f"User exists error: {e}")
+            return False
+
+    @staticmethod
+    def save_message(user_id, content, msg_type='Text', room_id=1, reply_to_message_id=None):
+        """Lưu tin nhắn vào database (Chuẩn Postgres)"""
+        try:
+            # GETDATE() của SQL Server được thay bằng CURRENT_TIMESTAMP trong Postgres
+            # IsRead là kiểu BOOLEAN nên dùng FALSE thay vì 0
+            query = """
+                INSERT INTO messages (senderid, content, messagetype, roomid, replytomessageid, sentat, isread)
+                VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, FALSE)
+            """
+            DatabaseManager.execute_query(query, (user_id, content, msg_type, room_id, reply_to_message_id))
+            return True
+        except Exception as e:
+            app_logger.error(f"Save message error: {e}")
+            return False
+
+    @staticmethod
+    def save_forwarded_message(user_id, original_message_id, target_room_id):
+        """Lưu tin nhắn được chuyển tiếp (Forwarded message)"""
+        try:
+            # Lấy thông tin tin nhắn gốc
+            original_query = """
+                SELECT content, messagetype, senderid
+                FROM messages
+                WHERE messageid = ?
+            """
+            original = DatabaseManager.execute_query(original_query, (original_message_id,), fetch_one=True)
+            
+            if not original:
+                return False
+            
+            content = original[0]
+            msg_type = original[1]
+            # Lưu ý: original_sender_id có thể dùng để hiển thị "Forwarded from..." trên giao diện
+            
+            # Kiểm tra và thêm cột forwardedfrommessageid nếu chưa tồn tại
+            if not DatabaseManager.column_exists('messages', 'forwardedfrommessageid'):
+                query = "ALTER TABLE messages ADD COLUMN forwardedfrommessageid INT NULL"
+                DatabaseManager.execute_query(query)
+            
+            # Chèn tin nhắn mới với tham chiếu đến ID tin nhắn gốc
+            query = """
+                INSERT INTO messages (senderid, content, messagetype, roomid, forwardedfrommessageid, sentat, isread)
+                VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, FALSE)
+            """
+            DatabaseManager.execute_query(query, (user_id, content, msg_type, target_room_id, original_message_id))
+            return True
+        except Exception as e:
+            app_logger.error(f"Save forwarded message error: {e}")
+            return False
+    @staticmethod
+    def user_exists(user_id):
+        """Kiểm tra sự tồn tại của người dùng (Tương thích Postgres)"""
+        try:
+            # PostgreSQL ưu tiên tên bảng và cột viết thường
+            query = "SELECT COUNT(*) FROM users WHERE userid = ?"
+            result = DatabaseManager.execute_query(query, (user_id,), fetch_one=True)
+            return result[0] > 0 if result else False
+        except Exception as e:
+            app_logger.error(f"User exists error: {e}")
+            return False
+
+    @staticmethod
+    def save_message(user_id, content, msg_type='Text', room_id=1, reply_to_message_id=None):
+        """Lưu tin nhắn vào database (Chuẩn Postgres)"""
+        try:
+            # GETDATE() của SQL Server được thay bằng CURRENT_TIMESTAMP trong Postgres
+            # IsRead là kiểu BOOLEAN nên dùng FALSE thay vì 0
+            query = """
+                INSERT INTO messages (senderid, content, messagetype, roomid, replytomessageid, sentat, isread)
+                VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, FALSE)
+            """
+            DatabaseManager.execute_query(query, (user_id, content, msg_type, room_id, reply_to_message_id))
+            return True
+        except Exception as e:
+            app_logger.error(f"Save message error: {e}")
+            return False
+
+    @staticmethod
+    def save_forwarded_message(user_id, original_message_id, target_room_id):
+        """Lưu tin nhắn được chuyển tiếp (Forwarded message)"""
+        try:
+            # Lấy thông tin tin nhắn gốc
+            original_query = """
+                SELECT content, messagetype, senderid
+                FROM messages
+                WHERE messageid = ?
+            """
+            original = DatabaseManager.execute_query(original_query, (original_message_id,), fetch_one=True)
+            
+            if not original:
+                return False
+            
+            content = original[0]
+            msg_type = original[1]
+            # Lưu ý: original_sender_id có thể dùng để hiển thị "Forwarded from..." trên giao diện
+            
+            # Kiểm tra và thêm cột forwardedfrommessageid nếu chưa tồn tại
+            if not DatabaseManager.column_exists('messages', 'forwardedfrommessageid'):
+                query = "ALTER TABLE messages ADD COLUMN forwardedfrommessageid INT NULL"
+                DatabaseManager.execute_query(query)
+            
+            # Chèn tin nhắn mới với tham chiếu đến ID tin nhắn gốc
+            query = """
+                INSERT INTO messages (senderid, content, messagetype, roomid, forwardedfrommessageid, sentat, isread)
+                VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, FALSE)
+            """
+            DatabaseManager.execute_query(query, (user_id, content, msg_type, target_room_id, original_message_id))
+            return True
+        except Exception as e:
+            app_logger.error(f"Save forwarded message error: {e}")
+            return False
 
     @staticmethod
     def update_email_notification_enabled(user_id, enabled):
-        """Cập nhật trạng thái email notification của user"""
+        """Cập nhật trạng thái email notification của user (Tương thích Postgres)"""
         try:
-            # Check if EmailNotificationEnabled column exists
-            if not DatabaseManager.column_exists('Users', 'EmailNotificationEnabled'):
-                query = "ALTER TABLE Users ADD EmailNotificationEnabled BIT DEFAULT 0"
+            # Kiểm tra và thêm cột emailnotificationenabled nếu chưa có
+            # PostgreSQL dùng BOOLEAN thay vì BIT
+            if not DatabaseManager.column_exists('users', 'emailnotificationenabled'):
+                query = "ALTER TABLE users ADD COLUMN emailnotificationenabled BOOLEAN DEFAULT FALSE"
                 DatabaseManager.execute_query(query)
             
-            query = "UPDATE Users SET EmailNotificationEnabled = ? WHERE UserID = ?"
-            DatabaseManager.execute_query(query, (1 if enabled else 0, user_id))
+            # Sử dụng giá trị Boolean trực tiếp (True/False)
+            query = "UPDATE users SET emailnotificationenabled = ? WHERE userid = ?"
+            DatabaseManager.execute_query(query, (enabled, user_id))
             return True
         except Exception as e:
             app_logger.error(f"Update email notification enabled error: {e}")
@@ -1425,12 +1584,12 @@ def save_forwarded_message(user_id, original_message_id, target_room_id):
     def get_email_notification_enabled(user_id):
         """Lấy trạng thái email notification của user"""
         try:
-            # Check if column exists
-            if not DatabaseManager.column_exists('Users', 'EmailNotificationEnabled'):
+            if not DatabaseManager.column_exists('users', 'emailnotificationenabled'):
                 return False
             
-            query = "SELECT EmailNotificationEnabled FROM Users WHERE UserID = ?"
+            query = "SELECT emailnotificationenabled FROM users WHERE userid = ?"
             result = DatabaseManager.execute_query(query, (user_id,), fetch_one=True)
+            # Postgres trả về True/False cho kiểu BOOLEAN
             return bool(result[0]) if result and result[0] is not None else False
         except Exception as e:
             app_logger.error(f"Get email notification enabled error: {e}")
@@ -1438,16 +1597,17 @@ def save_forwarded_message(user_id, original_message_id, target_room_id):
 
     @staticmethod
     def get_users_with_email_notification_enabled(room_id):
-        """Lấy danh sách users trong phòng có bật email notification"""
+        """Lấy danh sách users trong phòng có bật email notification (Postgres)"""
         try:
+            # Query dùng BOOLEAN condition: emailnotificationenabled = TRUE
             query = """
-                SELECT u.UserID, u.Email, u.FullName
-                FROM Users u
-                JOIN RoomParticipants rp ON u.UserID = rp.UserID
-                WHERE rp.RoomID = ? 
-                AND u.Email IS NOT NULL 
-                AND u.Email != ''
-                AND u.EmailNotificationEnabled = 1
+                SELECT u.userid, u.email, u.fullname
+                FROM users u
+                JOIN roomparticipants rp ON u.userid = rp.userid
+                WHERE rp.roomid = ? 
+                AND u.email IS NOT NULL 
+                AND u.email != ''
+                AND u.emailnotificationenabled = TRUE
             """
             users = DatabaseManager.execute_query(query, (room_id,), fetch_all=True)
             return [{
@@ -1459,76 +1619,79 @@ def save_forwarded_message(user_id, original_message_id, target_room_id):
             app_logger.error(f"Get users with email notification enabled error: {e}")
             return []
 
-@staticmethod
-def remove_member_from_group(room_id, user_id):
-    """Remove member from group"""
-    try:
-        query = """
-            DELETE FROM RoomParticipants
-            WHERE RoomID = ? AND UserID = ?
-        """
-        DatabaseManager.execute_query(query, (room_id, user_id))
-        return True
-    except Exception as e:
-        app_logger.error(f"Remove member from group error: {e}")
-        return False
+    @staticmethod
+    def remove_member_from_group(room_id, user_id):
+        """Xóa thành viên khỏi nhóm (Tương thích Postgres)"""
+        try:
+            # Chuyển tên bảng/cột về chữ thường
+            query = """
+                DELETE FROM roomparticipants
+                WHERE roomid = ? AND userid = ?
+            """
+            DatabaseManager.execute_query(query, (room_id, user_id))
+            return True
+        except Exception as e:
+            app_logger.error(f"Remove member from group error: {e}")
+            return False
 
-@staticmethod
-def update_group_info(room_id, room_name, description=None):
-    """Update group information"""
-    try:
-        # Ensure Rooms table has necessary columns
-        if not DatabaseManager.column_exists('Rooms', 'Description'):
-            DatabaseManager.execute_query("ALTER TABLE Rooms ADD Description NVARCHAR(500) NULL")
-        
-        if not DatabaseManager.column_exists('Rooms', 'AvatarUrl'):
-            DatabaseManager.execute_query("ALTER TABLE Rooms ADD AvatarUrl NVARCHAR(500) NULL")
-        
-        query = """
-            UPDATE Rooms
-            SET RoomName = ?, Description = ?
-            WHERE RoomID = ?
-        """
-        DatabaseManager.execute_query(query, (room_name, description, room_id))
-        return True
-    except Exception as e:
-        app_logger.error(f"Update group info error: {e}")
-        return False
+    @staticmethod
+    def update_group_info(room_id, room_name, description=None):
+        """Cập nhật thông tin nhóm (Chuẩn Postgres)"""
+        try:
+            # PostgreSQL dùng TEXT hoặc VARCHAR thay vì NVARCHAR
+            if not DatabaseManager.column_exists('rooms', 'description'):
+                DatabaseManager.execute_query("ALTER TABLE rooms ADD COLUMN description VARCHAR(500) NULL")
+            
+            if not DatabaseManager.column_exists('rooms', 'avatarurl'):
+                DatabaseManager.execute_query("ALTER TABLE rooms ADD COLUMN avatarurl VARCHAR(500) NULL")
+            
+            query = """
+                UPDATE rooms
+                SET roomname = ?, description = ?
+                WHERE roomid = ?
+            """
+            DatabaseManager.execute_query(query, (room_name, description, room_id))
+            return True
+        except Exception as e:
+            app_logger.error(f"Update group info error: {e}")
+            return False
 
     @staticmethod
     def create_group_invite(room_id, inviter_id, invitee_id):
-        """Tạo group invite"""
+        """Tạo lời mời vào nhóm (Tương thích Postgres)"""
         try:
-            # Check if GroupInvites table exists
-            if not DatabaseManager.table_exists('GroupInvites'):
+            # Kiểm tra và tạo bảng groupinvites nếu chưa có
+            if not DatabaseManager.table_exists('groupinvites'):
+                # IDENTITY(1,1) -> SERIAL
+                # GETDATE() -> CURRENT_TIMESTAMP
                 query = """
-                    CREATE TABLE GroupInvites (
-                        InviteID INT IDENTITY(1,1) PRIMARY KEY,
-                        RoomID INT NOT NULL,
-                        InviterID INT NOT NULL,
-                        InviteeID INT NOT NULL,
-                        Status NVARCHAR(50) DEFAULT 'Pending',
-                        CreatedAt DATETIME DEFAULT GETDATE(),
-                        FOREIGN KEY (RoomID) REFERENCES Rooms(RoomID),
-                        FOREIGN KEY (InviterID) REFERENCES Users(UserID),
-                        FOREIGN KEY (InviteeID) REFERENCES Users(UserID)
+                    CREATE TABLE groupinvites (
+                        inviteid SERIAL PRIMARY KEY,
+                        roomid INT NOT NULL,
+                        inviterid INT NOT NULL,
+                        inviteeid INT NOT NULL,
+                        status VARCHAR(50) DEFAULT 'Pending',
+                        createdat TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        CONSTRAINT fk_room FOREIGN KEY (roomid) REFERENCES rooms(roomid),
+                        CONSTRAINT fk_inviter FOREIGN KEY (inviterid) REFERENCES users(userid),
+                        CONSTRAINT fk_invitee FOREIGN KEY (inviteeid) REFERENCES users(userid)
                     )
                 """
                 DatabaseManager.execute_query(query)
             
-            # Check if invite already exists
+            # Kiểm tra xem lời mời đang chờ (Pending) đã tồn tại chưa
             check_query = """
-                SELECT InviteID FROM GroupInvites 
-                WHERE RoomID = ? AND InviteeID = ? AND Status = 'Pending'
+                SELECT inviteid FROM groupinvites 
+                WHERE roomid = ? AND inviteeid = ? AND status = 'Pending'
             """
             existing = DatabaseManager.execute_query(check_query, (room_id, invitee_id), fetch_one=True)
             if existing:
-                return False  # Invite already exists
+                return False 
             
-            # Create invite
+            # Tạo lời mời mới
             query = """
-                INSERT INTO GroupInvites (RoomID, InviterID, InviteeID, Status, CreatedAt)
-                VALUES (?, ?, ?, 'Pending', GETDATE())
+                INSERT INTO groupinvites (roomid, inviterid, inviteeid, status, createdat)
+                VALUES (?, ?, ?, 'Pending', CURRENT_TIMESTAMP)
             """
             DatabaseManager.execute_query(query, (room_id, inviter_id, invitee_id))
             return True
@@ -1538,16 +1701,17 @@ def update_group_info(room_id, room_name, description=None):
 
     @staticmethod
     def get_pending_invites(user_id):
-        """Lấy danh sách pending invites của user"""
+        """Lấy danh sách lời mời đang chờ của người dùng (Tương thích Postgres)"""
         try:
+            # Chuyển tên bảng/cột về chữ thường
             query = """
-                SELECT gi.InviteID, gi.RoomID, gi.InviterID, gi.CreatedAt,
-                       r.RoomName, r.AvatarUrl, u.FullName as InviterName
-                FROM GroupInvites gi
-                JOIN Rooms r ON gi.RoomID = r.RoomID
-                JOIN Users u ON gi.InviterID = u.UserID
-                WHERE gi.InviteeID = ? AND gi.Status = 'Pending'
-                ORDER BY gi.CreatedAt DESC
+                SELECT gi.inviteid, gi.roomid, gi.inviterid, gi.createdat,
+                       r.roomname, r.avatarurl, u.fullname as invitername
+                FROM groupinvites gi
+                JOIN rooms r ON gi.roomid = r.roomid
+                JOIN users u ON gi.inviterid = u.userid
+                WHERE gi.inviteeid = ? AND gi.status = 'Pending'
+                ORDER BY gi.createdat DESC
             """
             invites = DatabaseManager.execute_query(query, (user_id,), fetch_all=True)
             return [{
@@ -1565,12 +1729,12 @@ def update_group_info(room_id, room_name, description=None):
 
     @staticmethod
     def accept_decline_invite(invite_id, user_id, action):
-        """Chấp nhận hoặc từ chối group invite"""
+        """Chấp nhận hoặc từ chối lời mời vào nhóm"""
         try:
-            # Get invite info
+            # Lấy thông tin lời mời
             query = """
-                SELECT RoomID, InviteeID FROM GroupInvites 
-                WHERE InviteID = ? AND InviteeID = ? AND Status = 'Pending'
+                SELECT roomid, inviteeid FROM groupinvites 
+                WHERE inviteid = ? AND inviteeid = ? AND status = 'Pending'
             """
             invite = DatabaseManager.execute_query(query, (invite_id, user_id), fetch_one=True)
             
@@ -1580,265 +1744,70 @@ def update_group_info(room_id, room_name, description=None):
             room_id = invite[0]
             
             if action == 'accept':
-                # Add user to group
+                # Thêm user vào nhóm (Gọi hàm đã có trong DatabaseManager)
                 DatabaseManager.add_member_to_group(room_id, user_id)
             
-            # Update invite status
+            # Cập nhật trạng thái lời mời
             update_query = """
-                UPDATE GroupInvites 
-                SET Status = ? 
-                WHERE InviteID = ?
+                UPDATE groupinvites 
+                SET status = ? 
+                WHERE inviteid = ?
             """
-            DatabaseManager.execute_query(update_query, ('Accepted' if action == 'accept' else 'Declined', invite_id))
+            status = 'Accepted' if action == 'accept' else 'Declined'
+            DatabaseManager.execute_query(update_query, (status, invite_id))
             return True
         except Exception as e:
             app_logger.error(f"Accept/decline invite error: {e}")
             return False
 
-@staticmethod
-def is_room_member(room_id, user_id):
-    """Check if user is member of a room"""
-    try:
-        query = """
-            SELECT COUNT(*) as IsMember
-            FROM RoomParticipants
-            WHERE RoomID = ? AND UserID = ?
-        """
-        result = DatabaseManager.execute_query(query, (room_id, user_id), fetch_one=True)
-        return result[0] > 0 if result else False
-    except Exception as e:
-        app_logger.error(f"Is room member error: {e}")
-        return False
-
-        
-@staticmethod
-def ensure_room_participants_table():
-    """Ensure RoomParticipants table exists"""
-    try:
-        app_logger.info("Checking/creating RoomParticipants table")
-        query = """
-            IF NOT EXISTS (
-                SELECT 1 
-                FROM sys.objects 
-                WHERE object_id = OBJECT_ID('RoomParticipants', 'U') 
-                    AND type in (N'U')
-            )
-            BEGIN
-                CREATE TABLE RoomParticipants (
-                    RoomID INT NOT NULL,
-                    UserID INT NOT NULL,
-                    JoinedAt DATETIME DEFAULT GETDATE(),
-                    PRIMARY KEY (RoomID, UserID),
-                    FOREIGN KEY (RoomID) REFERENCES Rooms(RoomID),
-                    FOREIGN KEY (UserID) REFERENCES Users(UserID)
-                )
-            END
-        """
-        DatabaseManager.execute_query(query)
-        app_logger.info("RoomParticipants table checked/created successfully")
-    except Exception as e:
-        app_logger.error(f"RoomParticipants table creation error: {e}")
-
-
-
-@staticmethod
-def get_group_members(room_id):
-    """Get group members"""
-    try:
-        query = """
-            SELECT u.UserID, u.FullName, u.Username, rp.Role, rp.JoinedAt, u.Status
-            FROM RoomParticipants rp
-            JOIN Users u ON rp.UserID = u.UserID
-            WHERE rp.RoomID = ?
-            ORDER BY rp.Role DESC, u.FullName
-        """
-        members = DatabaseManager.execute_query(query, (room_id,), fetch_all=True)
-        return [{
-            'user_id': member[0],
-            'full_name': member[1],
-            'username': member[2],
-            'role': member[3],
-            'joined_at': member[4].strftime('%Y-%m-%d %H:%M:%S') if member[4] else '',
-            'status': member[5]
-        } for member in members]
-    except Exception as e:
-        app_logger.error(f"Get group members error: {e}")
-        return []
-
-@staticmethod
-def search_messages_in_room(room_id, query, page=1, limit=20):
-    """Search messages in a room"""
-    try:
-        offset = (page - 1) * limit
-        
-        # Search messages
-        search_query = """
-            SELECT m.MessageID, m.SenderID, u.FullName as SenderName, m.Content,
-                   m.MessageType, m.SentAt, m.EditedAt, m.IsDeleted
-            FROM Messages m
-            JOIN Users u ON m.SenderID = u.UserID
-            WHERE m.RoomID = ? AND (m.IsDeleted IS NULL OR m.IsDeleted = 0)
-              AND (m.Content LIKE ? OR u.FullName LIKE ?)
-            ORDER BY m.SentAt DESC
-            OFFSET ? ROWS FETCH NEXT ? ROWS ONLY
-        """
-        messages = DatabaseManager.execute_query(search_query, (room_id, f"%{query}%", f"%{query}%", offset, limit), fetch_all=True)
-        
-        # Get total count
-        count_query = """
-            SELECT COUNT(*) as TotalResults
-            FROM Messages m
-            JOIN Users u ON m.SenderID = u.UserID
-            WHERE m.RoomID = ? AND (m.IsDeleted IS NULL OR m.IsDeleted = 0)
-              AND (m.Content LIKE ? OR u.FullName LIKE ?)
-        """
-        total = DatabaseManager.execute_query(count_query, (room_id, f"%{query}%", f"%{query}%"), fetch_one=True)[0]
-        
-        return {
-            'messages': [{
-                'message_id': msg[0],
-                'sender_id': msg[1],
-                'sender_name': msg[2],
-                'content': msg[3],
-                'message_type': msg[4],
-                'sent_at': msg[5].strftime('%Y-%m-%d %H:%M:%S') if msg[5] else '',
-                'edited_at': msg[6].strftime('%Y-%m-%d %H:%M:%S') if msg[6] else None,
-                'is_deleted': bool(msg[7])
-            } for msg in messages],
-            'total': total,
-            'page': page,
-            'limit': limit
-        }
-    except Exception as e:
-        app_logger.error(f"Search messages in room error: {e}")
-        return {'messages': [], 'total': 0, 'page': page, 'limit': limit}
-
-@staticmethod
-def global_search_messages(user_id, query, page=1, limit=20):
-    """Global search across all user's rooms"""
-    try:
-        offset = (page - 1) * limit
-        
-        # Search messages
-        search_query = """
-            SELECT DISTINCT m.MessageID, m.SenderID, u.FullName as SenderName, m.Content,
-                   m.MessageType, m.SentAt, m.RoomID, r.RoomName,
-                   CASE WHEN r.IsGroup = 1 THEN r.RoomName ELSE 'Chat riêng' END as RoomDisplayName
-            FROM Messages m
-            JOIN Users u ON m.SenderID = u.UserID
-            JOIN Rooms r ON m.RoomID = r.RoomID
-            JOIN RoomParticipants rp ON r.RoomID = rp.RoomID AND rp.UserID = ?
-            WHERE (m.IsDeleted IS NULL OR m.IsDeleted = 0)
-              AND (m.Content LIKE ? OR u.FullName LIKE ? OR r.RoomName LIKE ?)
-            ORDER BY m.SentAt DESC
-            OFFSET ? ROWS FETCH NEXT ? ROWS ONLY
-        """
-        messages = DatabaseManager.execute_query(search_query, (user_id, f"%{query}%", f"%{query}%", f"%{query}%", offset, limit), fetch_all=True)
-        
-        # Get total count
-        count_query = """
-            SELECT COUNT(DISTINCT m.MessageID) as TotalResults
-            FROM Messages m
-            JOIN Users u ON m.SenderID = u.UserID
-            JOIN Rooms r ON m.RoomID = r.RoomID
-            JOIN RoomParticipants rp ON r.RoomID = rp.RoomID AND rp.UserID = ?
-            WHERE (m.IsDeleted IS NULL OR m.IsDeleted = 0)
-              AND (m.Content LIKE ? OR u.FullName LIKE ? OR r.RoomName LIKE ?)
-        """
-        total = DatabaseManager.execute_query(count_query, (user_id, f"%{query}%", f"%{query}%", f"%{query}%"), fetch_one=True)[0]
-        
-        return {
-            'messages': [{
-                'message_id': msg[0],
-                'sender_id': msg[1],
-                'sender_name': msg[2],
-                'content': msg[3],
-                'type': msg[4],
-                'sent_at': msg[5].strftime('%Y-%m-%d %H:%M:%S') if msg[5] else '',
-                'room_id': msg[6],
-                'room_name': msg[7],
-                'room_display_name': msg[8]
-            } for msg in messages],
-            'total': total,
-            'page': page,
-            'limit': limit
-        }
-    except Exception as e:
-        app_logger.error(f"Global search messages error: {e}")
-        return {'messages': [], 'total': 0, 'page': page, 'limit': limit}
-
-@staticmethod
-def get_search_suggestions(user_id, query):
-    """Get search suggestions for users and rooms"""
-    try:
-        search_query = """
-            SELECT DISTINCT 'user' as type, u.FullName as name, u.Username as username
-            FROM Users u
-            WHERE u.UserID != ? AND (u.FullName LIKE ? OR u.Username LIKE ?)
-            UNION ALL
-            SELECT DISTINCT 'room' as type, r.RoomName as name, '' as username
-            FROM Rooms r
-            JOIN RoomParticipants rp ON r.RoomID = rp.RoomID AND rp.UserID = ?
-            WHERE r.RoomName LIKE ?
-            ORDER BY name
-        """
-        suggestions = DatabaseManager.execute_query(search_query, (user_id, f"%{query}%", f"%{query}%", user_id, f"%{query}%"), fetch_all=True)
-        return [{
-            'type': sug[0],
-            'name': sug[1],
-            'username': sug[2]
-        } for sug in suggestions]
-    except Exception as e:
-        app_logger.error(f"Get search suggestions error: {e}")
-        return []
-    
-    @staticmethod
-    def update_group_info(room_id, room_name, description=None):
-        """Update group information"""
-        try:
-            # Ensure Rooms table has necessary columns
-            if not DatabaseManager.column_exists('Rooms', 'Description'):
-                DatabaseManager.execute_query("ALTER TABLE Rooms ADD Description NVARCHAR(500) NULL")
-            
-            if not DatabaseManager.column_exists('Rooms', 'AvatarUrl'):
-                DatabaseManager.execute_query("ALTER TABLE Rooms ADD AvatarUrl NVARCHAR(500) NULL")
-            
-            query = """
-                UPDATE Rooms
-                SET RoomName = ?, Description = ?
-                WHERE RoomID = ?
-            """
-            DatabaseManager.execute_query(query, (room_name, description, room_id))
-            return True
-        except Exception as e:
-            app_logger.error(f"Update group info error: {e}")
-            return False
-    
     @staticmethod
     def is_room_member(room_id, user_id):
-        """Check if user is member of a room"""
+        """Kiểm tra xem người dùng có phải thành viên phòng không"""
         try:
             query = """
-                SELECT COUNT(*) as IsMember
-                FROM RoomParticipants
-                WHERE RoomID = ? AND UserID = ?
+                SELECT COUNT(*) 
+                FROM roomparticipants 
+                WHERE roomid = ? AND userid = ?
             """
             result = DatabaseManager.execute_query(query, (room_id, user_id), fetch_one=True)
             return result[0] > 0 if result else False
         except Exception as e:
             app_logger.error(f"Is room member error: {e}")
             return False
-    
+
+        
+    @staticmethod
+    def ensure_room_participants_table():
+        """Đảm bảo bảng roomparticipants tồn tại (Chuẩn Postgres)"""
+        try:
+            app_logger.info("Checking/creating roomparticipants table")
+            # PostgreSQL dùng cú pháp CREATE TABLE IF NOT EXISTS đơn giản hơn
+            query = """
+                CREATE TABLE IF NOT EXISTS roomparticipants (
+                    roomid INT NOT NULL,
+                    userid INT NOT NULL,
+                    joinedat TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    role VARCHAR(50) DEFAULT 'Member',
+                    PRIMARY KEY (roomid, userid),
+                    CONSTRAINT fk_room FOREIGN KEY (roomid) REFERENCES rooms(roomid),
+                    CONSTRAINT fk_user FOREIGN KEY (userid) REFERENCES users(userid)
+                )
+            """
+            DatabaseManager.execute_query(query)
+            app_logger.info("roomparticipants table checked/created successfully")
+        except Exception as e:
+            app_logger.error(f"RoomParticipants table creation error: {e}")
+
     @staticmethod
     def get_group_members(room_id):
-        """Get group members"""
+        """Lấy danh sách thành viên trong nhóm (Postgres)"""
         try:
             query = """
-                SELECT u.UserID, u.FullName, u.Username, rp.Role, rp.JoinedAt, u.Status
-                FROM RoomParticipants rp
-                JOIN Users u ON rp.UserID = u.UserID
-                WHERE rp.RoomID = ?
-                ORDER BY rp.Role DESC, u.FullName
+                SELECT u.userid, u.fullname, u.username, rp.role, rp.joinedat, u.status
+                FROM roomparticipants rp
+                JOIN users u ON rp.userid = u.userid
+                WHERE rp.roomid = ?
+                ORDER BY CASE WHEN rp.role = 'Admin' THEN 1 ELSE 2 END, u.fullname
             """
             members = DatabaseManager.execute_query(query, (room_id,), fetch_all=True)
             return [{
@@ -1852,35 +1821,45 @@ def get_search_suggestions(user_id, query):
         except Exception as e:
             app_logger.error(f"Get group members error: {e}")
             return []
-    
+
     @staticmethod
-    def search_messages_in_room(room_id, query, page=1, limit=20):
-        """Search messages in a room"""
+    def search_messages_in_room(room_id, search_text, page=1, limit=20):
+        """Tìm kiếm tin nhắn trong phòng (Phân trang chuẩn Postgres)"""
         try:
             offset = (page - 1) * limit
             
-            # Search messages
+            # PostgreSQL dùng LIMIT và OFFSET thay vì OFFSET/FETCH NEXT
+            # Sử dụng ILIKE để tìm kiếm không phân biệt hoa thường (đặc trưng của Postgres)
             search_query = """
-                SELECT m.MessageID, m.SenderID, u.FullName as SenderName, m.Content,
-                       m.MessageType, m.SentAt, m.EditedAt, m.IsDeleted
-                FROM Messages m
-                JOIN Users u ON m.SenderID = u.UserID
-                WHERE m.RoomID = ? AND (m.IsDeleted IS NULL OR m.IsDeleted = 0)
-                  AND (m.Content LIKE ? OR u.FullName LIKE ?)
-                ORDER BY m.SentAt DESC
-                OFFSET ? ROWS FETCH NEXT ? ROWS ONLY
+                SELECT m.messageid, m.senderid, u.fullname as sendername, m.content,
+                       m.messagetype, m.sentat, m.editedat, m.isdeleted
+                FROM messages m
+                JOIN users u ON m.senderid = u.userid
+                WHERE m.roomid = ? AND (m.isdeleted IS FALSE OR m.isdeleted IS NULL)
+                  AND (m.content ILIKE ? OR u.fullname ILIKE ?)
+                ORDER BY m.sentat DESC
+                LIMIT ? OFFSET ?
             """
-            messages = DatabaseManager.execute_query(search_query, (room_id, f"%{query}%", f"%{query}%", offset, limit), fetch_all=True)
+            messages = DatabaseManager.execute_query(
+                search_query, 
+                (room_id, f"%{search_text}%", f"%{search_text}%", limit, offset), 
+                fetch_all=True
+            )
             
-            # Get total count
+            # Lấy tổng số kết quả
             count_query = """
-                SELECT COUNT(*) as TotalResults
-                FROM Messages m
-                JOIN Users u ON m.SenderID = u.UserID
-                WHERE m.RoomID = ? AND (m.IsDeleted IS NULL OR m.IsDeleted = 0)
-                  AND (m.Content LIKE ? OR u.FullName LIKE ?)
+                SELECT COUNT(*)
+                FROM messages m
+                JOIN users u ON m.senderid = u.userid
+                WHERE m.roomid = ? AND (m.isdeleted IS FALSE OR m.isdeleted IS NULL)
+                  AND (m.content ILIKE ? OR u.fullname ILIKE ?)
             """
-            total = DatabaseManager.execute_query(count_query, (room_id, f"%{query}%", f"%{query}%"), fetch_one=True)[0]
+            total_result = DatabaseManager.execute_query(
+                count_query, 
+                (room_id, f"%{search_text}%", f"%{search_text}%"), 
+                fetch_one=True
+            )
+            total = total_result[0] if total_result else 0
             
             return {
                 'messages': [{
@@ -1900,40 +1879,329 @@ def get_search_suggestions(user_id, query):
         except Exception as e:
             app_logger.error(f"Search messages in room error: {e}")
             return {'messages': [], 'total': 0, 'page': page, 'limit': limit}
-    
+
     @staticmethod
-    def global_search_messages(user_id, query, page=1, limit=20):
-        """Global search across all user's rooms"""
+    def global_search_messages(user_id, query_text, page=1, limit=20):
+        """Tìm kiếm tin nhắn toàn cầu trên tất cả các phòng mà user tham gia"""
         try:
             offset = (page - 1) * limit
+            search_pattern = f"%{query_text}%"
             
-            # Search messages
+            # PostgreSQL dùng LIMIT/OFFSET thay vì OFFSET/FETCH
+            # Sử dụng ILIKE để tìm kiếm tiếng Việt có dấu/không dấu linh hoạt hơn
             search_query = """
-                SELECT DISTINCT m.MessageID, m.SenderID, u.FullName as SenderName, m.Content,
-                       m.MessageType, m.SentAt, m.RoomID, r.RoomName,
-                       CASE WHEN r.IsGroup = 1 THEN r.RoomName ELSE 'Chat riêng' END as RoomDisplayName
-                FROM Messages m
-                JOIN Users u ON m.SenderID = u.UserID
-                JOIN Rooms r ON m.RoomID = r.RoomID
-                JOIN RoomParticipants rp ON r.RoomID = rp.RoomID AND rp.UserID = ?
-                WHERE (m.IsDeleted IS NULL OR m.IsDeleted = 0)
-                  AND (m.Content LIKE ? OR u.FullName LIKE ? OR r.RoomName LIKE ?)
-                ORDER BY m.SentAt DESC
-                OFFSET ? ROWS FETCH NEXT ? ROWS ONLY
+                SELECT DISTINCT m.messageid, m.senderid, u.fullname as sendername, m.content,
+                       m.messagetype, m.sentat, m.roomid, r.roomname,
+                       CASE WHEN r.isgroup IS TRUE THEN r.roomname ELSE 'Chat riêng' END as roomdisplayname
+                FROM messages m
+                JOIN users u ON m.senderid = u.userid
+                JOIN rooms r ON m.roomid = r.roomid
+                JOIN roomparticipants rp ON r.roomid = rp.roomid AND rp.userid = ?
+                WHERE (m.isdeleted IS FALSE OR m.isdeleted IS NULL)
+                  AND (m.content ILIKE ? OR u.fullname ILIKE ? OR r.roomname ILIKE ?)
+                ORDER BY m.sentat DESC
+                LIMIT ? OFFSET ?
             """
-            messages = DatabaseManager.execute_query(search_query, (user_id, f"%{query}%", f"%{query}%", f"%{query}%", offset, limit), fetch_all=True)
+            messages = DatabaseManager.execute_query(
+                search_query, 
+                (user_id, search_pattern, search_pattern, search_pattern, limit, offset), 
+                fetch_all=True
+            )
             
-            # Get total count
+            # Lấy tổng số kết quả (Dùng COUNT DISTINCT để tránh trùng lặp)
             count_query = """
-                SELECT COUNT(DISTINCT m.MessageID) as TotalResults
-                FROM Messages m
-                JOIN Users u ON m.SenderID = u.UserID
-                JOIN Rooms r ON m.RoomID = r.RoomID
-                JOIN RoomParticipants rp ON r.RoomID = rp.RoomID AND rp.UserID = ?
-                WHERE (m.IsDeleted IS NULL OR m.IsDeleted = 0)
-                  AND (m.Content LIKE ? OR u.FullName LIKE ? OR r.RoomName LIKE ?)
+                SELECT COUNT(DISTINCT m.messageid)
+                FROM messages m
+                JOIN users u ON m.senderid = u.userid
+                JOIN rooms r ON m.roomid = r.roomid
+                JOIN roomparticipants rp ON r.roomid = rp.roomid AND rp.userid = ?
+                WHERE (m.isdeleted IS FALSE OR m.isdeleted IS NULL)
+                  AND (m.content ILIKE ? OR u.fullname ILIKE ? OR r.roomname ILIKE ?)
             """
-            total = DatabaseManager.execute_query(count_query, (user_id, f"%{query}%", f"%{query}%", f"%{query}%"), fetch_one=True)[0]
+            total_result = DatabaseManager.execute_query(
+                count_query, 
+                (user_id, search_pattern, search_pattern, search_pattern), 
+                fetch_one=True
+            )
+            total = total_result[0] if total_result else 0
+            
+            return {
+                'messages': [{
+                    'message_id': msg[0],
+                    'sender_id': msg[1],
+                    'sender_name': msg[2],
+                    'content': msg[3],
+                    'type': msg[4],
+                    'sent_at': msg[5].strftime('%Y-%m-%d %H:%M:%S') if msg[5] else '',
+                    'room_id': msg[6],
+                    'room_name': msg[7],
+                    'room_display_name': msg[8]
+                } for msg in messages],
+                'total': total,
+                'page': page,
+                'limit': limit
+            }
+        except Exception as e:
+            app_logger.error(f"Global search messages error: {e}")
+            return {'messages': [], 'total': 0, 'page': page, 'limit': limit}
+
+    @staticmethod
+    def get_search_suggestions(user_id, query_text):
+        """Lấy gợi ý tìm kiếm cho người dùng và phòng chat"""
+        try:
+            search_pattern = f"%{query_text}%"
+            # Postgres yêu cầu các cột trong UNION ALL phải tương đồng hoàn toàn về kiểu dữ liệu
+            search_query = """
+                SELECT DISTINCT 'user' as type, u.fullname as name, u.username as username
+                FROM users u
+                WHERE u.userid != ? AND (u.fullname ILIKE ? OR u.username ILIKE ?)
+                UNION ALL
+                SELECT DISTINCT 'room' as type, r.roomname as name, '' as username
+                FROM rooms r
+                JOIN roomparticipants rp ON r.roomid = rp.roomid AND rp.userid = ?
+                WHERE r.roomname ILIKE ?
+                ORDER BY name
+                LIMIT 10
+            """
+            suggestions = DatabaseManager.execute_query(
+                search_query, 
+                (user_id, search_pattern, search_pattern, user_id, search_pattern), 
+                fetch_all=True
+            )
+            return [{
+                'type': sug[0],
+                'name': sug[1],
+                'username': sug[2]
+            } for sug in suggestions]
+        except Exception as e:
+            app_logger.error(f"Get search suggestions error: {e}")
+            return []
+    
+    @staticmethod
+    def update_group_info(room_id, room_name, description=None):
+        """Cập nhật thông tin nhóm (Tương thích Postgres)"""
+        try:
+            # PostgreSQL dùng VARCHAR thay cho NVARCHAR
+            if not DatabaseManager.column_exists('rooms', 'description'):
+                DatabaseManager.execute_query("ALTER TABLE rooms ADD COLUMN description VARCHAR(500) NULL")
+            
+            if not DatabaseManager.column_exists('rooms', 'avatarurl'):
+                DatabaseManager.execute_query("ALTER TABLE rooms ADD COLUMN avatarurl VARCHAR(500) NULL")
+            
+            query = """
+                UPDATE rooms
+                SET roomname = ?, description = ?
+                WHERE roomid = ?
+            """
+            DatabaseManager.execute_query(query, (room_name, description, room_id))
+            return True
+        except Exception as e:
+            app_logger.error(f"Update group info error: {e}")
+            return False
+    
+    @staticmethod
+    def is_room_member(room_id, user_id):
+        """Kiểm tra xem người dùng có phải thành viên của phòng không"""
+        try:
+            # Viết thường tên bảng và cột để tránh lỗi định danh trong Postgres
+            query = """
+                SELECT COUNT(*) 
+                FROM roomparticipants 
+                WHERE roomid = ? AND userid = ?
+            """
+            result = DatabaseManager.execute_query(query, (room_id, user_id), fetch_one=True)
+            return result[0] > 0 if result else False
+        except Exception as e:
+            app_logger.error(f"Is room member error: {e}")
+            return False
+    
+    @staticmethod
+    def get_group_members(room_id):
+        """Lấy danh sách thành viên trong nhóm kèm thông tin chi tiết"""
+        try:
+            query = """
+                SELECT u.userid, u.fullname, u.username, rp.role, rp.joinedat, u.status
+                FROM roomparticipants rp
+                JOIN users u ON rp.userid = u.userid
+                WHERE rp.roomid = ?
+                ORDER BY CASE WHEN rp.role = 'Admin' THEN 1 ELSE 2 END, u.fullname
+            """
+            members = DatabaseManager.execute_query(query, (room_id,), fetch_all=True)
+            return [{
+                'user_id': member[0],
+                'full_name': member[1],
+                'username': member[2],
+                'role': member[3],
+                'joined_at': member[4].strftime('%Y-%m-%d %H:%M:%S') if member[4] else '',
+                'status': member[5]
+            } for member in members]
+        except Exception as e:
+            app_logger.error(f"Get group members error: {e}")
+            return []
+    @staticmethod
+    def update_group_info(room_id, room_name, description=None):
+        """Cập nhật thông tin nhóm (Tương thích Postgres)"""
+        try:
+            # PostgreSQL dùng VARCHAR thay cho NVARCHAR
+            if not DatabaseManager.column_exists('rooms', 'description'):
+                DatabaseManager.execute_query("ALTER TABLE rooms ADD COLUMN description VARCHAR(500) NULL")
+            
+            if not DatabaseManager.column_exists('rooms', 'avatarurl'):
+                DatabaseManager.execute_query("ALTER TABLE rooms ADD COLUMN avatarurl VARCHAR(500) NULL")
+            
+            query = """
+                UPDATE rooms
+                SET roomname = ?, description = ?
+                WHERE roomid = ?
+            """
+            DatabaseManager.execute_query(query, (room_name, description, room_id))
+            return True
+        except Exception as e:
+            app_logger.error(f"Update group info error: {e}")
+            return False
+    
+    @staticmethod
+    def is_room_member(room_id, user_id):
+        """Kiểm tra xem người dùng có phải thành viên của phòng không"""
+        try:
+            # Viết thường tên bảng và cột để tránh lỗi định danh trong Postgres
+            query = """
+                SELECT COUNT(*) 
+                FROM roomparticipants 
+                WHERE roomid = ? AND userid = ?
+            """
+            result = DatabaseManager.execute_query(query, (room_id, user_id), fetch_one=True)
+            return result[0] > 0 if result else False
+        except Exception as e:
+            app_logger.error(f"Is room member error: {e}")
+            return False
+    
+    @staticmethod
+    def get_group_members(room_id):
+        """Lấy danh sách thành viên trong nhóm kèm thông tin chi tiết"""
+        try:
+            query = """
+                SELECT u.userid, u.fullname, u.username, rp.role, rp.joinedat, u.status
+                FROM roomparticipants rp
+                JOIN users u ON rp.userid = u.userid
+                WHERE rp.roomid = ?
+                ORDER BY CASE WHEN rp.role = 'Admin' THEN 1 ELSE 2 END, u.fullname
+            """
+            members = DatabaseManager.execute_query(query, (room_id,), fetch_all=True)
+            return [{
+                'user_id': member[0],
+                'full_name': member[1],
+                'username': member[2],
+                'role': member[3],
+                'joined_at': member[4].strftime('%Y-%m-%d %H:%M:%S') if member[4] else '',
+                'status': member[5]
+            } for member in members]
+        except Exception as e:
+            app_logger.error(f"Get group members error: {e}")
+            return []
+    
+    @staticmethod
+    def search_messages_in_room(room_id, query_text, page=1, limit=20):
+        """Tìm kiếm tin nhắn trong một phòng cụ thể (Chuẩn Postgres)"""
+        try:
+            offset = (page - 1) * limit
+            search_pattern = f"%{query_text}%"
+            
+            # Sử dụng LIMIT/OFFSET thay cho OFFSET/FETCH NEXT
+            # ILIKE giúp tìm kiếm không phân biệt hoa thường và hỗ trợ tốt hơn cho tiếng Việt
+            search_query = """
+                SELECT m.messageid, m.senderid, u.fullname as sendername, m.content,
+                       m.messagetype, m.sentat, m.editedat, m.isdeleted
+                FROM messages m
+                JOIN users u ON m.senderid = u.userid
+                WHERE m.roomid = ? AND (m.isdeleted IS FALSE OR m.isdeleted IS NULL)
+                  AND (m.content ILIKE ? OR u.fullname ILIKE ?)
+                ORDER BY m.sentat DESC
+                LIMIT ? OFFSET ?
+            """
+            messages = DatabaseManager.execute_query(
+                search_query, 
+                (room_id, search_pattern, search_pattern, limit, offset), 
+                fetch_all=True
+            )
+            
+            # Lấy tổng số kết quả để phân trang
+            count_query = """
+                SELECT COUNT(*)
+                FROM messages m
+                JOIN users u ON m.senderid = u.userid
+                WHERE m.roomid = ? AND (m.isdeleted IS FALSE OR m.isdeleted IS NULL)
+                  AND (m.content ILIKE ? OR u.fullname ILIKE ?)
+            """
+            total_result = DatabaseManager.execute_query(
+                count_query, 
+                (room_id, search_pattern, search_pattern), 
+                fetch_one=True
+            )
+            total = total_result[0] if total_result else 0
+            
+            return {
+                'messages': [{
+                    'message_id': msg[0],
+                    'sender_id': msg[1],
+                    'sender_name': msg[2],
+                    'content': msg[3],
+                    'message_type': msg[4],
+                    'sent_at': msg[5].strftime('%Y-%m-%d %H:%M:%S') if msg[5] else '',
+                    'edited_at': msg[6].strftime('%Y-%m-%d %H:%M:%S') if msg[6] else None,
+                    'is_deleted': bool(msg[7])
+                } for msg in messages],
+                'total': total,
+                'page': page,
+                'limit': limit
+            }
+        except Exception as e:
+            app_logger.error(f"Search messages in room error: {e}")
+            return {'messages': [], 'total': 0, 'page': page, 'limit': limit}
+
+    @staticmethod
+    def global_search_messages(user_id, query_text, page=1, limit=20):
+        """Tìm kiếm tin nhắn trên tất cả các phòng mà người dùng tham gia"""
+        try:
+            offset = (page - 1) * limit
+            search_pattern = f"%{query_text}%"
+            
+            # Logic xử lý: Chỉ tìm trong các phòng mà user_id là thành viên (RoomParticipants)
+            search_query = """
+                SELECT DISTINCT m.messageid, m.senderid, u.fullname as sendername, m.content,
+                       m.messagetype, m.sentat, m.roomid, r.roomname,
+                       CASE WHEN r.isgroup IS TRUE THEN r.roomname ELSE 'Chat riêng' END as roomdisplayname
+                FROM messages m
+                JOIN users u ON m.senderid = u.userid
+                JOIN rooms r ON m.roomid = r.roomid
+                JOIN roomparticipants rp ON r.roomid = rp.roomid AND rp.userid = ?
+                WHERE (m.isdeleted IS FALSE OR m.isdeleted IS NULL)
+                  AND (m.content ILIKE ? OR u.fullname ILIKE ? OR r.roomname ILIKE ?)
+                ORDER BY m.sentat DESC
+                LIMIT ? OFFSET ?
+            """
+            messages = DatabaseManager.execute_query(
+                search_query, 
+                (user_id, search_pattern, search_pattern, search_pattern, limit, offset), 
+                fetch_all=True
+            )
+            
+            # Đếm tổng số kết quả duy nhất
+            count_query = """
+                SELECT COUNT(DISTINCT m.messageid)
+                FROM messages m
+                JOIN users u ON m.senderid = u.userid
+                JOIN rooms r ON m.roomid = r.roomid
+                JOIN roomparticipants rp ON r.roomid = rp.roomid AND rp.userid = ?
+                WHERE (m.isdeleted IS FALSE OR m.isdeleted IS NULL)
+                  AND (m.content ILIKE ? OR u.fullname ILIKE ? OR r.roomname ILIKE ?)
+            """
+            total_result = DatabaseManager.execute_query(
+                count_query, 
+                (user_id, search_pattern, search_pattern, search_pattern), 
+                fetch_one=True
+            )
+            total = total_result[0] if total_result else 0
             
             return {
                 'messages': [{
@@ -1956,22 +2224,28 @@ def get_search_suggestions(user_id, query):
             return {'messages': [], 'total': 0, 'page': page, 'limit': limit}
     
     @staticmethod
-    def get_search_suggestions(user_id, query):
-        """Get search suggestions for users and rooms"""
+    def get_search_suggestions(user_id, query_text):
+        """Lấy gợi ý tìm kiếm cho người dùng và phòng chat (Tương thích Postgres)"""
         try:
+            search_pattern = f"%{query_text}%"
+            # Sử dụng ILIKE để tìm kiếm không phân biệt hoa thường
             search_query = """
-                SELECT DISTINCT 'user' as type, u.FullName as name, u.Username as username
-                FROM Users u
-                WHERE u.UserID != ? AND (u.FullName LIKE ? OR u.Username LIKE ?)
+                SELECT DISTINCT 'user' as type, u.fullname as name, u.username as username
+                FROM users u
+                WHERE u.userid != ? AND (u.fullname ILIKE ? OR u.username ILIKE ?)
                 UNION ALL
-                SELECT DISTINCT 'room' as type, r.RoomName as name, '' as username
-                FROM Rooms r
-                JOIN RoomParticipants rp ON r.RoomID = rp.RoomID AND rp.UserID = ?
-                WHERE r.RoomName LIKE ?
+                SELECT DISTINCT 'room' as type, r.roomname as name, '' as username
+                FROM rooms r
+                JOIN roomparticipants rp ON r.roomid = rp.roomid AND rp.userid = ?
+                WHERE r.roomname ILIKE ?
                 ORDER BY name
                 LIMIT 10
             """
-            suggestions = DatabaseManager.execute_query(search_query, (user_id, f"%{query}%", f"%{query}%", user_id, f"%{query}%"), fetch_all=True)
+            suggestions = DatabaseManager.execute_query(
+                search_query, 
+                (user_id, search_pattern, search_pattern, user_id, search_pattern), 
+                fetch_all=True
+            )
             return [{
                 'type': sug[0],
                 'name': sug[1],
@@ -1983,16 +2257,16 @@ def get_search_suggestions(user_id, query):
     
     @staticmethod
     def set_theme(user_id, theme):
-        """Set user theme"""
+        """Thiết lập giao diện (Light/Dark) cho người dùng"""
         try:
-            # Ensure Users table has Theme column
-            if not DatabaseManager.column_exists('Users', 'Theme'):
-                DatabaseManager.execute_query("ALTER TABLE Users ADD Theme NVARCHAR(20) NOT NULL DEFAULT 'light'")
+            # Kiểm tra và tạo cột theme nếu chưa có (Postgres dùng VARCHAR)
+            if not DatabaseManager.column_exists('users', 'theme'):
+                DatabaseManager.execute_query("ALTER TABLE users ADD COLUMN theme VARCHAR(20) NOT NULL DEFAULT 'light'")
             
             query = """
-                UPDATE Users
-                SET Theme = ?
-                WHERE UserID = ?
+                UPDATE users
+                SET theme = ?
+                WHERE userid = ?
             """
             DatabaseManager.execute_query(query, (theme, user_id))
             return True
@@ -2002,16 +2276,15 @@ def get_search_suggestions(user_id, query):
     
     @staticmethod
     def get_theme(user_id):
-        """Get user theme"""
+        """Lấy cấu hình giao diện của người dùng"""
         try:
-            # Ensure Users table has Theme column
-            if not DatabaseManager.column_exists('Users', 'Theme'):
-                DatabaseManager.execute_query("ALTER TABLE Users ADD Theme NVARCHAR(20) NOT NULL DEFAULT 'light'")
+            if not DatabaseManager.column_exists('users', 'theme'):
+                DatabaseManager.execute_query("ALTER TABLE users ADD COLUMN theme VARCHAR(20) NOT NULL DEFAULT 'light'")
             
             query = """
-                SELECT Theme
-                FROM Users
-                WHERE UserID = ?
+                SELECT theme
+                FROM users
+                WHERE userid = ?
             """
             result = DatabaseManager.execute_query(query, (user_id,), fetch_one=True)
             return result[0] if result else 'light'
@@ -2021,30 +2294,20 @@ def get_search_suggestions(user_id, query):
     
     @staticmethod
     def toggle_theme(user_id):
-        """Toggle user theme between light and dark"""
+        """Chuyển đổi giao diện sáng/tối cho người dùng"""
         try:
-            # Ensure Users table has Theme column
-            if not DatabaseManager.column_exists('Users', 'Theme'):
-                DatabaseManager.execute_query("ALTER TABLE Users ADD Theme NVARCHAR(20) NOT NULL DEFAULT 'light'")
+            if not DatabaseManager.column_exists('users', 'theme'):
+                DatabaseManager.execute_query("ALTER TABLE users ADD COLUMN theme VARCHAR(20) NOT NULL DEFAULT 'light'")
             
-            # Get current theme
-            query = """
-                SELECT Theme
-                FROM Users
-                WHERE UserID = ?
-            """
+            # Lấy theme hiện tại
+            query = "SELECT theme FROM users WHERE userid = ?"
             result = DatabaseManager.execute_query(query, (user_id,), fetch_one=True)
             current_theme = result[0] if result else 'light'
             
-            # Toggle theme
+            # Đảo ngược theme
             new_theme = 'dark' if current_theme == 'light' else 'light'
             
-            # Update theme
-            update_query = """
-                UPDATE Users
-                SET Theme = ?
-                WHERE UserID = ?
-            """
+            update_query = "UPDATE users SET theme = ? WHERE userid = ?"
             DatabaseManager.execute_query(update_query, (new_theme, user_id))
             return new_theme
         except Exception as e:
@@ -2053,17 +2316,12 @@ def get_search_suggestions(user_id, query):
     
     @staticmethod
     def is_admin(user_id):
-        """Check if user is admin"""
+        """Kiểm tra quyền quản trị viên (Admin)"""
         try:
-            # Ensure Users table has Role column
-            if not DatabaseManager.column_exists('Users', 'Role'):
-                DatabaseManager.execute_query("ALTER TABLE Users ADD Role NVARCHAR(20) NOT NULL DEFAULT 'User'")
+            if not DatabaseManager.column_exists('users', 'role'):
+                DatabaseManager.execute_query("ALTER TABLE users ADD COLUMN role VARCHAR(20) NOT NULL DEFAULT 'User'")
             
-            query = """
-                SELECT Role
-                FROM Users
-                WHERE UserID = ?
-            """
+            query = "SELECT role FROM users WHERE userid = ?"
             result = DatabaseManager.execute_query(query, (user_id,), fetch_one=True)
             role = result[0] if result else 'User'
             return role == 'Admin'
@@ -2073,46 +2331,46 @@ def get_search_suggestions(user_id, query):
     
     @staticmethod
     def get_admin_dashboard_stats():
-        """Get admin dashboard statistics"""
+        """Lấy thống kê tổng quan cho trang quản trị (Chuẩn Postgres)"""
         try:
-            # Total counts
-            total_users = DatabaseManager.execute_query("SELECT COUNT(*) as TotalUsers FROM Users", fetch_one=True)[0]
-            total_rooms = DatabaseManager.execute_query("SELECT COUNT(*) as TotalRooms FROM Rooms", fetch_one=True)[0]
-            total_messages = DatabaseManager.execute_query("SELECT COUNT(*) as TotalMessages FROM Messages", fetch_one=True)[0]
-            total_files = DatabaseManager.execute_query("SELECT COUNT(*) as TotalFiles FROM SharedFiles", fetch_one=True)[0]
+            # Các câu lệnh đếm tổng đơn giản
+            total_users = DatabaseManager.execute_query("SELECT COUNT(*) FROM users", fetch_one=True)[0]
+            total_rooms = DatabaseManager.execute_query("SELECT COUNT(*) FROM rooms", fetch_one=True)[0]
+            total_messages = DatabaseManager.execute_query("SELECT COUNT(*) FROM messages", fetch_one=True)[0]
+            total_files = DatabaseManager.execute_query("SELECT COUNT(*) FROM sharedfiles", fetch_one=True)[0]
+            online_users = DatabaseManager.execute_query("SELECT COUNT(*) FROM users WHERE status = 'Online'", fetch_one=True)[0]
             
-            # Online users
-            online_users = DatabaseManager.execute_query("SELECT COUNT(*) as OnlineUsers FROM Users WHERE Status = 'Online'", fetch_one=True)[0]
-            
-            # Daily stats (last 7 days)
+            # Thống kê tin nhắn 7 ngày gần nhất (Dùng INTERVAL)
             daily_stats_query = """
-                SELECT CAST(SentAt AS DATE) as Date, COUNT(*) as MessageCount
-                FROM Messages
-                WHERE SentAt >= DATEADD(day, -7, GETDATE())
-                GROUP BY CAST(SentAt AS DATE)
+                SELECT sentat::DATE as Date, COUNT(*) as MessageCount
+                FROM messages
+                WHERE sentat >= CURRENT_DATE - INTERVAL '7 days'
+                GROUP BY sentat::DATE
                 ORDER BY Date DESC
             """
             daily_stats = DatabaseManager.execute_query(daily_stats_query, fetch_all=True)
             
-            # Top 10 users
+            # Top 10 người dùng tích cực nhất (30 ngày qua)
             top_users_query = """
-                SELECT TOP 10 u.FullName, COUNT(m.MessageID) as MessageCount
-                FROM Users u
-                LEFT JOIN Messages m ON u.UserID = m.SenderID
-                WHERE m.SentAt >= DATEADD(day, -30, GETDATE())
-                GROUP BY u.UserID, u.FullName
+                SELECT u.fullname, COUNT(m.messageid) as MessageCount
+                FROM users u
+                LEFT JOIN messages m ON u.userid = m.senderid
+                WHERE m.sentat >= CURRENT_DATE - INTERVAL '30 days'
+                GROUP BY u.userid, u.fullname
                 ORDER BY MessageCount DESC
+                LIMIT 10
             """
             top_users = DatabaseManager.execute_query(top_users_query, fetch_all=True)
             
-            # Top 10 rooms
+            # Top 10 phòng chat sôi nổi nhất (30 ngày qua)
             top_rooms_query = """
-                SELECT TOP 10 r.RoomName, COUNT(m.MessageID) as MessageCount
-                FROM Rooms r
-                LEFT JOIN Messages m ON r.RoomID = m.RoomID
-                WHERE m.SentAt >= DATEADD(day, -30, GETDATE())
-                GROUP BY r.RoomID, r.RoomName
+                SELECT r.roomname, COUNT(m.messageid) as MessageCount
+                FROM rooms r
+                LEFT JOIN messages m ON r.roomid = m.roomid
+                WHERE m.sentat >= CURRENT_DATE - INTERVAL '30 days'
+                GROUP BY r.roomid, r.roomname
                 ORDER BY MessageCount DESC
+                LIMIT 10
             """
             top_rooms = DatabaseManager.execute_query(top_rooms_query, fetch_all=True)
             
@@ -2128,36 +2386,28 @@ def get_search_suggestions(user_id, query):
             }
         except Exception as e:
             app_logger.error(f"Get admin dashboard stats error: {e}")
-            return {
-                'total_users': 0,
-                'total_rooms': 0,
-                'total_messages': 0,
-                'total_files': 0,
-                'online_users': 0,
-                'daily_stats': [],
-                'top_users': [],
-                'top_rooms': []
-            }
+            return {'total_users': 0, 'total_rooms': 0, 'total_messages': 0, 'online_users': 0}
     
     @staticmethod
     def get_admin_users(page=1, limit=20):
-        """Get admin users with pagination"""
+        """Lấy danh sách người dùng cho Admin với phân trang (Chuẩn Postgres)"""
         try:
             offset = (page - 1) * limit
             
+            # Sử dụng LIMIT OFFSET thay cho OFFSET FETCH ROWS
             query = """
-                SELECT u.UserID, u.FullName, u.Username, u.Email, u.Status, u.Role,
-                       u.CreatedAt, u.LastLoginAt,
-                       COUNT(m.MessageID) as MessageCount
-                FROM Users u
-                LEFT JOIN Messages m ON u.UserID = m.SenderID
-                GROUP BY u.UserID, u.FullName, u.Username, u.Email, u.Status, u.Role, u.CreatedAt, u.LastLoginAt
-                ORDER BY u.CreatedAt DESC
-                OFFSET ? ROWS FETCH NEXT ? ROWS ONLY
+                SELECT u.userid, u.fullname, u.username, u.email, u.status, u.role,
+                       u.createdat, u.lastloginat,
+                       COUNT(m.messageid) as MessageCount
+                FROM users u
+                LEFT JOIN messages m ON u.userid = m.senderid
+                GROUP BY u.userid, u.fullname, u.username, u.email, u.status, u.role, u.createdat, u.lastloginat
+                ORDER BY u.createdat DESC
+                LIMIT ? OFFSET ?
             """
-            users = DatabaseManager.execute_query(query, (offset, limit), fetch_all=True)
+            users = DatabaseManager.execute_query(query, (limit, offset), fetch_all=True)
             
-            count_query = "SELECT COUNT(*) as Total FROM Users"
+            count_query = "SELECT COUNT(*) FROM users"
             total_count = DatabaseManager.execute_query(count_query, fetch_one=True)[0]
             
             return {
@@ -2182,13 +2432,9 @@ def get_search_suggestions(user_id, query):
     
     @staticmethod
     def update_user_role(user_id, new_role):
-        """Update user role"""
+        """Cập nhật quyền người dùng"""
         try:
-            query = """
-                UPDATE Users
-                SET Role = ?
-                WHERE UserID = ?
-            """
+            query = "UPDATE users SET role = ? WHERE userid = ?"
             DatabaseManager.execute_query(query, (new_role, user_id))
             return True
         except Exception as e:
@@ -2197,60 +2443,56 @@ def get_search_suggestions(user_id, query):
     
     @staticmethod
     def get_system_stats():
-        """Get system statistics"""
+        """Lấy thống kê hệ thống chi tiết (Postgres)"""
         try:
             stats = {}
             
-            # User stats
-            stats['total_users'] = DatabaseManager.execute_query("SELECT COUNT(*) as Total FROM Users", fetch_one=True)[0]
-            stats['online_users'] = DatabaseManager.execute_query("SELECT COUNT(*) as Online FROM Users WHERE Status = 'Online'", fetch_one=True)[0]
-            stats['new_users_today'] = DatabaseManager.execute_query("SELECT COUNT(*) as Today FROM Users WHERE CAST(CreatedAt AS DATE) = CAST(GETDATE() AS DATE)", fetch_one=True)[0]
+            # Thống kê User
+            stats['total_users'] = DatabaseManager.execute_query("SELECT COUNT(*) FROM users", fetch_one=True)[0]
+            stats['online_users'] = DatabaseManager.execute_query("SELECT COUNT(*) FROM users WHERE status = 'Online'", fetch_one=True)[0]
             
-            # Message stats
-            stats['total_messages'] = DatabaseManager.execute_query("SELECT COUNT(*) as Total FROM Messages", fetch_one=True)[0]
-            stats['messages_today'] = DatabaseManager.execute_query("SELECT COUNT(*) as Today FROM Messages WHERE CAST(SentAt AS DATE) = CAST(GETDATE() AS DATE)", fetch_one=True)[0]
+            # So sánh ngày trong Postgres: dùng CURRENT_DATE
+            stats['new_users_today'] = DatabaseManager.execute_query(
+                "SELECT COUNT(*) FROM users WHERE createdat::DATE = CURRENT_DATE", fetch_one=True)[0]
             
-            # File stats
-            stats['total_files'] = DatabaseManager.execute_query("SELECT COUNT(*) as Total FROM SharedFiles", fetch_one=True)[0]
-            result = DatabaseManager.execute_query("SELECT SUM(FileSize) as TotalSize FROM SharedFiles", fetch_one=True)
-            stats['total_file_size'] = result[0] if result and result[0] else 0
+            # Thống kê Tin nhắn
+            stats['total_messages'] = DatabaseManager.execute_query("SELECT COUNT(*) FROM messages", fetch_one=True)[0]
+            stats['messages_today'] = DatabaseManager.execute_query(
+                "SELECT COUNT(*) FROM messages WHERE sentat::DATE = CURRENT_DATE", fetch_one=True)[0]
             
-            # Room stats
-            stats['total_rooms'] = DatabaseManager.execute_query("SELECT COUNT(*) as Total FROM Rooms", fetch_one=True)[0]
-            stats['total_groups'] = DatabaseManager.execute_query("SELECT COUNT(*) as Groups FROM Rooms WHERE IsGroup = 1", fetch_one=True)[0]
+            # Thống kê File (Lưu ý: SUM có thể trả về None nếu không có dữ liệu)
+            stats['total_files'] = DatabaseManager.execute_query("SELECT COUNT(*) FROM sharedfiles", fetch_one=True)[0]
+            result_size = DatabaseManager.execute_query("SELECT SUM(filesize) FROM sharedfiles", fetch_one=True)
+            stats['total_file_size'] = result_size[0] if result_size and result_size[0] else 0
+            
+            # Thống kê Phòng (Postgres dùng kiểu BOOLEAN cho isgroup)
+            stats['total_rooms'] = DatabaseManager.execute_query("SELECT COUNT(*) FROM rooms", fetch_one=True)[0]
+            stats['total_groups'] = DatabaseManager.execute_query(
+                "SELECT COUNT(*) FROM rooms WHERE isgroup IS TRUE", fetch_one=True)[0]
             
             return stats
         except Exception as e:
             app_logger.error(f"Get system stats error: {e}")
-            return {
-                'total_users': 0,
-                'online_users': 0,
-                'new_users_today': 0,
-                'total_messages': 0,
-                'messages_today': 0,
-                'total_files': 0,
-                'total_file_size': 0,
-                'total_rooms': 0,
-                'total_groups': 0
-            }
+            return {'total_users': 0, 'online_users': 0, 'total_messages': 0}
     
     @staticmethod
     def ensure_voice_messages_table():
-        """Ensure VoiceMessages table exists"""
+        """Đảm bảo bảng voicemessages tồn tại (Chuẩn Postgres)"""
         try:
-            if not DatabaseManager.column_exists('VoiceMessages', 'VoiceID'):
+            # PostgreSQL sử dụng chữ thường cho tên bảng/cột để tránh lỗi phân biệt hoa thường
+            if not DatabaseManager.column_exists('voicemessages', 'voiceid'):
                 create_table_query = """
-                    CREATE TABLE VoiceMessages (
-                        VoiceID INT IDENTITY(1,1) PRIMARY KEY,
-                        FileName NVARCHAR(255) NOT NULL,
-                        FilePath NVARCHAR(500) NOT NULL,
-                        Duration INT NULL,
-                        FileSize INT NOT NULL,
-                        UploadedBy INT NOT NULL,
-                        RoomID INT NULL,
-                        CreatedAt DATETIME DEFAULT GETDATE(),
-                        FOREIGN KEY (UploadedBy) REFERENCES Users(UserID),
-                        FOREIGN KEY (RoomID) REFERENCES Rooms(RoomID)
+                    CREATE TABLE voicemessages (
+                        voiceid SERIAL PRIMARY KEY,
+                        filename VARCHAR(255) NOT NULL,
+                        filepath VARCHAR(500) NOT NULL,
+                        duration INT NULL,
+                        filesize INT NOT NULL,
+                        uploadedby INT NOT NULL,
+                        roomid INT NULL,
+                        createdat TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        FOREIGN KEY (uploadedby) REFERENCES users(userid),
+                        FOREIGN KEY (roomid) REFERENCES rooms(roomid)
                     )
                 """
                 DatabaseManager.execute_query(create_table_query)
@@ -2259,11 +2501,11 @@ def get_search_suggestions(user_id, query):
     
     @staticmethod
     def save_voice_message(filename, filepath, filesize, uploaded_by, room_id=None, duration=None):
-        """Save voice message to database"""
+        """Lưu thông tin tin nhắn thoại vào cơ sở dữ liệu"""
         try:
             DatabaseManager.ensure_voice_messages_table()
             query = """
-                INSERT INTO VoiceMessages (FileName, FilePath, FileSize, UploadedBy, RoomID, Duration)
+                INSERT INTO voicemessages (filename, filepath, filesize, uploadedby, roomid, duration)
                 VALUES (?, ?, ?, ?, ?, ?)
             """
             DatabaseManager.execute_query(query, (filename, filepath, filesize, uploaded_by, room_id, duration))
@@ -2274,19 +2516,19 @@ def get_search_suggestions(user_id, query):
     
     @staticmethod
     def get_voice_messages(room_id, user_id):
-        """Get voice messages for a room"""
+        """Lấy danh sách tin nhắn thoại trong phòng chat"""
         try:
-            # Check if user is member of the room
+            # Kiểm tra xem người dùng có phải thành viên phòng không
             if not DatabaseManager.is_room_member(room_id, user_id):
                 return []
             
             query = """
-                SELECT vm.VoiceID, vm.FileName, vm.FilePath, vm.Duration,
-                       vm.FileSize, vm.CreatedAt, u.FullName as SenderName
-                FROM VoiceMessages vm
-                JOIN Users u ON vm.UploadedBy = u.UserID
-                WHERE vm.RoomID = ?
-                ORDER BY vm.CreatedAt DESC
+                SELECT vm.voiceid, vm.filename, vm.filepath, vm.duration,
+                       vm.filesize, vm.createdat, u.fullname as sendername
+                FROM voicemessages vm
+                JOIN users u ON vm.uploadedby = u.userid
+                WHERE vm.roomid = ?
+                ORDER BY vm.createdat DESC
             """
             voice_messages = DatabaseManager.execute_query(query, (room_id,), fetch_all=True)
             return [{
@@ -2304,20 +2546,21 @@ def get_search_suggestions(user_id, query):
     
     @staticmethod
     def enable_2fa(user_id, secret):
-        """Enable 2FA for user"""
+        """Khởi tạo 2FA cho người dùng (Postgres)"""
         try:
-            # Ensure Users table has 2FA columns
-            if not DatabaseManager.column_exists('Users', 'TwoFASecret'):
-                DatabaseManager.execute_query("ALTER TABLE Users ADD TwoFASecret NVARCHAR(255) NULL")
+            # Đảm bảo bảng users có cột chứa Secret (Dùng VARCHAR thay cho NVARCHAR)
+            if not DatabaseManager.column_exists('users', 'twofasecret'):
+                DatabaseManager.execute_query("ALTER TABLE users ADD COLUMN twofasecret VARCHAR(255) NULL")
             
-            if not DatabaseManager.column_exists('Users', 'TwoFAEnabled'):
-                DatabaseManager.execute_query("ALTER TABLE Users ADD TwoFAEnabled BIT NOT NULL DEFAULT 0")
+            # Sử dụng kiểu BOOLEAN thay cho BIT
+            if not DatabaseManager.column_exists('users', 'twofaenabled'):
+                DatabaseManager.execute_query("ALTER TABLE users ADD COLUMN twofaenabled BOOLEAN NOT NULL DEFAULT FALSE")
             
-            # Save secret
+            # Lưu secret và tạm thời để trạng thái chưa kích hoạt (FALSE)
             query = """
-                UPDATE Users
-                SET TwoFASecret = ?, TwoFAEnabled = 0
-                WHERE UserID = ?
+                UPDATE users
+                SET twofasecret = ?, twofaenabled = FALSE
+                WHERE userid = ?
             """
             DatabaseManager.execute_query(query, (secret, user_id))
             return True
@@ -2327,13 +2570,9 @@ def get_search_suggestions(user_id, query):
     
     @staticmethod
     def get_2fa_secret(user_id):
-        """Get 2FA secret for user"""
+        """Lấy mã secret 2FA của người dùng"""
         try:
-            query = """
-                SELECT TwoFASecret
-                FROM Users
-                WHERE UserID = ?
-            """
+            query = "SELECT twofasecret FROM users WHERE userid = ?"
             result = DatabaseManager.execute_query(query, (user_id,), fetch_one=True)
             return result[0] if result and result[0] else None
         except Exception as e:
@@ -2342,13 +2581,10 @@ def get_search_suggestions(user_id, query):
     
     @staticmethod
     def enable_2fa_verified(user_id):
-        """Enable 2FA after verification"""
+        """Chính thức kích hoạt 2FA sau khi người dùng nhập đúng mã xác nhận lần đầu"""
         try:
-            query = """
-                UPDATE Users
-                SET TwoFAEnabled = 1
-                WHERE UserID = ?
-            """
+            # Trong Postgres, dùng TRUE cho kiểu BOOLEAN
+            query = "UPDATE users SET twofaenabled = TRUE WHERE userid = ?"
             DatabaseManager.execute_query(query, (user_id,))
             return True
         except Exception as e:
@@ -2357,12 +2593,13 @@ def get_search_suggestions(user_id, query):
     
     @staticmethod
     def get_user_password_and_2fa_secret(user_id):
-        """Get user password and 2FA secret"""
+        """Lấy mật khẩu và mã secret 2FA của người dùng (Postgres)"""
         try:
+            # PostgreSQL ưu tiên tên cột viết thường
             query = """
-                SELECT Password, TwoFASecret
-                FROM Users
-                WHERE UserID = ?
+                SELECT password, twofasecret
+                FROM users
+                WHERE userid = ?
             """
             result = DatabaseManager.execute_query(query, (user_id,), fetch_one=True)
             return result if result else (None, None)
@@ -2372,12 +2609,13 @@ def get_search_suggestions(user_id, query):
     
     @staticmethod
     def disable_2fa(user_id):
-        """Disable 2FA for user"""
+        """Tắt tính năng 2FA cho người dùng"""
         try:
+            # Trong Postgres, dùng FALSE thay cho 0 và NULL cho secret
             query = """
-                UPDATE Users
-                SET TwoFAEnabled = 0, TwoFASecret = NULL
-                WHERE UserID = ?
+                UPDATE users
+                SET twofaenabled = FALSE, twofasecret = NULL
+                WHERE userid = ?
             """
             DatabaseManager.execute_query(query, (user_id,))
             return True
@@ -2387,14 +2625,15 @@ def get_search_suggestions(user_id, query):
     
     @staticmethod
     def get_2fa_secret_and_status(user_id):
-        """Get 2FA secret and enabled status for user"""
+        """Lấy mã secret và trạng thái kích hoạt 2FA"""
         try:
             query = """
-                SELECT TwoFASecret, TwoFAEnabled
-                FROM Users
-                WHERE UserID = ?
+                SELECT twofasecret, twofaenabled
+                FROM users
+                WHERE userid = ?
             """
             result = DatabaseManager.execute_query(query, (user_id,), fetch_one=True)
+            # result[1] lúc này sẽ là True hoặc False (kiểu boolean của Postgres)
             return result if result else (None, False)
         except Exception as e:
             app_logger.error(f"Get 2FA secret and status error: {e}")
@@ -2402,66 +2641,64 @@ def get_search_suggestions(user_id, query):
     
     @staticmethod
     def is_2fa_enabled(user_id):
-        """Check if 2FA is enabled for user"""
+        """Kiểm tra xem 2FA có đang bật hay không"""
         try:
-            query = """
-                SELECT TwoFAEnabled
-                FROM Users
-                WHERE UserID = ?
-            """
+            query = "SELECT twofaenabled FROM users WHERE userid = ?"
             result = DatabaseManager.execute_query(query, (user_id,), fetch_one=True)
-            return bool(result[0]) if result else False
+            # Postgres trả về giá trị boolean nên không cần ép kiểu phức tạp
+            return result[0] if result else False
         except Exception as e:
             app_logger.error(f"Is 2FA enabled error: {e}")
             return False
 
     @staticmethod
     def ensure_message_reactions_table():
-        """Ensure MessageReactions table exists"""
+        """Đảm bảo bảng messagereactions tồn tại (Chuẩn Postgres)"""
         try:
-            if not DatabaseManager.column_exists('MessageReactions', 'ReactionID'):
+            # PostgreSQL ưu tiên tên bảng viết thường
+            if not DatabaseManager.column_exists('messagereactions', 'reactionid'):
                 query = """
-                    CREATE TABLE MessageReactions (
-                        ReactionID INT IDENTITY(1,1) PRIMARY KEY,
-                        MessageID INT NOT NULL,
-                        UserID INT NOT NULL,
-                        Emoji NVARCHAR(50) NOT NULL,
-                        CreatedAt DATETIME DEFAULT GETDATE(),
-                        FOREIGN KEY (MessageID) REFERENCES Messages(MessageID),
-                        FOREIGN KEY (UserID) REFERENCES Users(UserID),
-                        UNIQUE (MessageID, UserID, Emoji)
+                    CREATE TABLE messagereactions (
+                        reactionid SERIAL PRIMARY KEY,
+                        messageid INT NOT NULL,
+                        userid INT NOT NULL,
+                        emoji VARCHAR(50) NOT NULL,
+                        createdat TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        FOREIGN KEY (messageid) REFERENCES messages(messageid),
+                        FOREIGN KEY (userid) REFERENCES users(userid),
+                        UNIQUE (messageid, userid, emoji)
                     )
                 """
                 DatabaseManager.execute_query(query)
-                app_logger.info("Created MessageReactions table")
+                app_logger.info("Created messagereactions table")
         except Exception as e:
             app_logger.error(f"Ensure message reactions table error: {e}")
     
     @staticmethod
     def add_reaction(message_id, user_id, emoji):
-        """Add reaction to message"""
+        """Thêm cảm xúc vào tin nhắn"""
         try:
             DatabaseManager.ensure_message_reactions_table()
             query = """
-                INSERT INTO MessageReactions (MessageID, UserID, Emoji)
+                INSERT INTO messagereactions (messageid, userid, emoji)
                 VALUES (?, ?, ?)
             """
             DatabaseManager.execute_query(query, (message_id, user_id, emoji))
             return True
-        except pyodbc.IntegrityError:
-            # User already reacted with this emoji
-            return False
         except Exception as e:
+            # Trong Postgres, khi vi phạm UNIQUE constraint, ta kiểm tra thông điệp lỗi
+            if "unique constraint" in str(e).lower():
+                return False  # Người dùng đã thả biểu cảm này rồi
             app_logger.error(f"Add reaction error: {e}")
             return False
     
     @staticmethod
     def remove_reaction(message_id, user_id, emoji):
-        """Remove reaction from message"""
+        """Xóa cảm xúc khỏi tin nhắn"""
         try:
             query = """
-                DELETE FROM MessageReactions
-                WHERE MessageID = ? AND UserID = ? AND Emoji = ?
+                DELETE FROM messagereactions
+                WHERE messageid = ? AND userid = ? AND emoji = ?
             """
             DatabaseManager.execute_query(query, (message_id, user_id, emoji))
             return True
@@ -2471,13 +2708,14 @@ def get_search_suggestions(user_id, query):
     
     @staticmethod
     def get_message_reactions(message_id):
-        """Get all reactions for a message"""
+        """Lấy tất cả cảm xúc của một tin nhắn (Postgres)"""
         try:
+            # PostgreSQL ưu tiên tên viết thường
             query = """
-                SELECT Emoji, COUNT(*) as Count
-                FROM MessageReactions
-                WHERE MessageID = ?
-                GROUP BY Emoji
+                SELECT emoji, COUNT(*) as count
+                FROM messagereactions
+                WHERE messageid = ?
+                GROUP BY emoji
             """
             reactions = DatabaseManager.execute_query(query, (message_id,), fetch_all=True)
             return {emoji: count for emoji, count in reactions}
@@ -2487,25 +2725,27 @@ def get_search_suggestions(user_id, query):
 
     @staticmethod
     def ensure_reply_column():
-        """Ensure ReplyToMessageID column exists in Messages table"""
+        """Đảm bảo cột replytomessageid tồn tại trong bảng messages"""
         try:
-            if not DatabaseManager.column_exists('Messages', 'ReplyToMessageID'):
-                query = "ALTER TABLE Messages ADD ReplyToMessageID INT NULL"
+            # Sử dụng tên bảng/cột viết thường để tránh lỗi Case-sensitive trên Render
+            if not DatabaseManager.column_exists('messages', 'replytomessageid'):
+                query = "ALTER TABLE messages ADD COLUMN replytomessageid INT NULL"
                 DatabaseManager.execute_query(query)
-                app_logger.info("Added ReplyToMessageID column to Messages table")
+                app_logger.info("Added replytomessageid column to messages table")
         except Exception as e:
             app_logger.error(f"Ensure reply column error: {e}")
     
     @staticmethod
     def get_message_for_reply(message_id):
-        """Get message details for reply"""
+        """Lấy thông tin tin nhắn gốc để hiển thị trong phần trả lời"""
         try:
             DatabaseManager.ensure_reply_column()
+            # Join bảng users để lấy tên người gửi tin nhắn gốc
             query = """
-                SELECT M.MessageID, M.Content, M.MessageType, U.FullName as SenderName, M.SentAt
-                FROM Messages M
-                JOIN Users U ON M.SenderID = U.UserID
-                WHERE M.MessageID = ?
+                SELECT m.messageid, m.content, m.messagetype, u.fullname as sendername, m.sentat
+                FROM messages m
+                JOIN users u ON m.senderid = u.userid
+                WHERE m.messageid = ?
             """
             result = DatabaseManager.execute_query(query, (message_id,), fetch_one=True)
             if result:
@@ -2514,6 +2754,7 @@ def get_search_suggestions(user_id, query):
                     'content': result[1],
                     'type': result[2],
                     'sender_name': result[3],
+                    # Xử lý định dạng thời gian từ TIMESTAMP của Postgres
                     'sent_at': result[4].strftime('%Y-%m-%d %H:%M:%S') if result[4] else None
                 }
             return None
@@ -2523,37 +2764,37 @@ def get_search_suggestions(user_id, query):
 
     @staticmethod
     def ensure_pinned_column():
-        """Ensure IsPinned column exists in Messages table"""
+        """Đảm bảo cột ispinnned tồn tại trong bảng messages (Postgres)"""
         try:
-            if not DatabaseManager.column_exists('Messages', 'IsPinned'):
-                query = "ALTER TABLE Messages ADD IsPinned BIT DEFAULT 0"
+            # PostgreSQL ưu tiên tên viết thường và sử dụng BOOLEAN thay cho BIT
+            if not DatabaseManager.column_exists('messages', 'ispinned'):
+                query = "ALTER TABLE messages ADD COLUMN ispinned BOOLEAN DEFAULT FALSE"
                 DatabaseManager.execute_query(query)
-                app_logger.info("Added IsPinned column to Messages table")
+                app_logger.info("Added ispinned column to messages table")
         except Exception as e:
             app_logger.error(f"Ensure pinned column error: {e}")
     
     @staticmethod
     def pin_message(message_id, user_id):
-        """Pin a message"""
+        """Ghim một tin nhắn"""
         try:
             DatabaseManager.ensure_pinned_column()
-            # Check if user has permission (admin or message sender)
-            query = """
-                SELECT SenderID, RoomID FROM Messages WHERE MessageID = ?
-            """
+            
+            # Kiểm tra quyền hạn: Chỉ người gửi hoặc Admin mới được ghim
+            query = "SELECT senderid, roomid FROM messages WHERE messageid = ?"
             result = DatabaseManager.execute_query(query, (message_id,), fetch_one=True)
             if not result:
                 return False
             
             sender_id = result[0]
-            # Allow pinning if user is sender or admin
             if sender_id != user_id:
-                # Check if user is admin
+                # Kiểm tra vai trò người dùng (Tới đã có hàm get_user_role)
                 user_role = DatabaseManager.get_user_role(user_id)
                 if user_role != 'Admin':
                     return False
             
-            query = "UPDATE Messages SET IsPinned = 1 WHERE MessageID = ?"
+            # Trong Postgres, sử dụng giá trị TRUE thay cho 1
+            query = "UPDATE messages SET ispinned = TRUE WHERE messageid = ?"
             DatabaseManager.execute_query(query, (message_id,))
             return True
         except Exception as e:
@@ -2562,10 +2803,11 @@ def get_search_suggestions(user_id, query):
     
     @staticmethod
     def unpin_message(message_id, user_id):
-        """Unpin a message"""
+        """Bỏ ghim một tin nhắn"""
         try:
             DatabaseManager.ensure_pinned_column()
-            query = "UPDATE Messages SET IsPinned = 0 WHERE MessageID = ?"
+            # Trong Postgres, sử dụng giá trị FALSE thay cho 0
+            query = "UPDATE messages SET ispinned = FALSE WHERE messageid = ?"
             DatabaseManager.execute_query(query, (message_id,))
             return True
         except Exception as e:
@@ -2574,16 +2816,17 @@ def get_search_suggestions(user_id, query):
     
     @staticmethod
     def get_pinned_messages(room_id):
-        """Get all pinned messages for a room"""
+        """Lấy tất cả tin nhắn đã ghim trong một phòng (Postgres)"""
         try:
             DatabaseManager.ensure_pinned_column()
+            # PostgreSQL ưu tiên tên viết thường. Lưu ý dùng TRUE thay cho 1.
             query = """
-                SELECT m.MessageID, m.Content, m.MessageType, m.SentAt, m.ReplyToMessageID,
-                       u.Username as SenderName, u.UserID as SenderID
-                FROM Messages m
-                JOIN Users u ON m.SenderID = u.UserID
-                WHERE m.RoomID = ? AND m.IsPinned = 1 AND m.IsDeleted = 0
-                ORDER BY m.SentAt DESC
+                SELECT m.messageid, m.content, m.messagetype, m.sentat, m.replytomessageid,
+                       u.username as sendername, u.userid as senderid
+                FROM messages m
+                JOIN users u ON m.senderid = u.userid
+                WHERE m.roomid = ? AND m.ispinned = TRUE AND m.isdeleted = FALSE
+                ORDER BY m.sentat DESC
             """
             messages = DatabaseManager.execute_query(query, (room_id,), fetch_all=True)
             return messages
@@ -2593,35 +2836,36 @@ def get_search_suggestions(user_id, query):
 
     @staticmethod
     def ensure_mentions_table():
-        """Ensure Mentions table exists"""
+        """Đảm bảo bảng mentions tồn tại trong database Postgres"""
         try:
-            if not DatabaseManager.column_exists('Mentions', 'MentionID'):
+            if not DatabaseManager.column_exists('mentions', 'mentionid'):
+                # SERIAL thay IDENTITY, BOOLEAN thay BIT, TIMESTAMP thay DATETIME
                 query = """
-                    CREATE TABLE Mentions (
-                        MentionID INT IDENTITY(1,1) PRIMARY KEY,
-                        MessageID INT NOT NULL,
-                        MentionedUserID INT NOT NULL,
-                        MentioningUserID INT NOT NULL,
-                        CreatedAt DATETIME DEFAULT GETDATE(),
-                        IsRead BIT DEFAULT 0,
-                        FOREIGN KEY (MessageID) REFERENCES Messages(MessageID),
-                        FOREIGN KEY (MentionedUserID) REFERENCES Users(UserID),
-                        FOREIGN KEY (MentioningUserID) REFERENCES Users(UserID)
+                    CREATE TABLE mentions (
+                        mentionid SERIAL PRIMARY KEY,
+                        messageid INT NOT NULL,
+                        mentioneduserid INT NOT NULL,
+                        mentioninguserid INT NOT NULL,
+                        createdat TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        isread BOOLEAN DEFAULT FALSE,
+                        FOREIGN KEY (messageid) REFERENCES messages(messageid),
+                        FOREIGN KEY (mentioneduserid) REFERENCES users(userid),
+                        FOREIGN KEY (mentioninguserid) REFERENCES users(userid)
                     )
                 """
                 DatabaseManager.execute_query(query)
-                app_logger.info("Created Mentions table")
+                app_logger.info("Created mentions table")
         except Exception as e:
             app_logger.error(f"Ensure mentions table error: {e}")
     
     @staticmethod
     def save_mentions(message_id, mentioned_user_ids, mentioning_user_id):
-        """Save mentions for a message"""
+        """Lưu danh sách những người bị nhắc tên trong tin nhắn"""
         try:
             DatabaseManager.ensure_mentions_table()
             for mentioned_user_id in mentioned_user_ids:
                 query = """
-                    INSERT INTO Mentions (MessageID, MentionedUserID, MentioningUserID)
+                    INSERT INTO mentions (messageid, mentioneduserid, mentioninguserid)
                     VALUES (?, ?, ?)
                 """
                 DatabaseManager.execute_query(query, (message_id, mentioned_user_id, mentioning_user_id))
@@ -2632,46 +2876,51 @@ def get_search_suggestions(user_id, query):
     
     @staticmethod
     def parse_mentions(content, room_id):
-        """Parse @mentions from message content and return user IDs"""
+        """Trích xuất @mentions từ nội dung tin nhắn và trả về danh sách ID người dùng"""
         try:
             import re
+            # Tìm các chuỗi bắt đầu bằng @ theo sau là chữ cái hoặc số
             mentions = re.findall(r'@(\w+)', content)
             if not mentions:
                 return []
             
-            # Get users in the room
-            query = """
-                SELECT DISTINCT u.UserID, u.Username
-                FROM Users u
-                JOIN RoomParticipants rp ON u.UserID = rp.UserID
-                WHERE rp.RoomID = ? AND u.Username IN ({})
-            """.format(','.join(['?' for _ in mentions]))
+            # Lấy thông tin người dùng trong phòng chat có username trùng với danh sách mentions
+            # Sử dụng tham số hóa để bảo mật SQL Injection
+            placeholders = ','.join(['?' for _ in mentions])
+            query = f"""
+                SELECT DISTINCT u.userid, u.username
+                FROM users u
+                JOIN roomparticipants rp ON u.userid = rp.userid
+                WHERE rp.roomid = ? AND u.username IN ({placeholders})
+            """
             
             params = [room_id] + mentions
             users = DatabaseManager.execute_query(query, params, fetch_all=True)
             
-            # Map usernames to user IDs
+            # Tạo dictionary mapping để tra cứu nhanh ID từ username
             username_to_id = {user[1]: user[0] for user in users}
             mentioned_ids = [username_to_id.get(username) for username in mentions if username in username_to_id]
             
-            return mentioned_ids
+            # Loại bỏ các giá trị trùng lặp nếu một người bị tag nhiều lần trong 1 tin nhắn
+            return list(set(mentioned_ids))
         except Exception as e:
             app_logger.error(f"Parse mentions error: {e}")
             return []
     
     @staticmethod
     def get_user_mentions(user_id):
-        """Get all mentions for a user"""
+        """Lấy tất cả các thông báo nhắc tên của một người dùng (Postgres)"""
         try:
             DatabaseManager.ensure_mentions_table()
+            # Sử dụng JOIN để lấy nội dung tin nhắn và tên người đã nhắc mình
             query = """
-                SELECT m.MentionID, m.MessageID, m.MentioningUserID, m.CreatedAt, m.IsRead,
-                       msg.Content, msg.RoomID, u.Username as MentioningUsername
-                FROM Mentions m
-                JOIN Messages msg ON m.MessageID = msg.MessageID
-                JOIN Users u ON m.MentioningUserID = u.UserID
-                WHERE m.MentionedUserID = ?
-                ORDER BY m.CreatedAt DESC
+                SELECT m.mentionid, m.messageid, m.mentioninguserid, m.createdat, m.isread,
+                       msg.content, msg.roomid, u.username as mentioningusername
+                FROM mentions m
+                JOIN messages msg ON m.messageid = msg.messageid
+                JOIN users u ON m.mentioninguserid = u.userid
+                WHERE m.mentioneduserid = ?
+                ORDER BY m.createdat DESC
             """
             mentions = DatabaseManager.execute_query(query, (user_id,), fetch_all=True)
             return mentions
@@ -2681,10 +2930,11 @@ def get_search_suggestions(user_id, query):
     
     @staticmethod
     def mark_mention_as_read(mention_id):
-        """Mark a mention as read"""
+        """Đánh dấu một thông báo nhắc tên là đã đọc"""
         try:
             DatabaseManager.ensure_mentions_table()
-            query = "UPDATE Mentions SET IsRead = 1 WHERE MentionID = ?"
+            # Trong Postgres, cập nhật IsRead thành TRUE thay vì 1
+            query = "UPDATE mentions SET isread = TRUE WHERE mentionid = ?"
             DatabaseManager.execute_query(query, (mention_id,))
             return True
         except Exception as e:
@@ -2693,21 +2943,22 @@ def get_search_suggestions(user_id, query):
 
     @staticmethod
     def ensure_group_avatar_column():
-        """Ensure GroupAvatar column exists in Rooms table"""
+        """Đảm bảo cột groupavatar tồn tại trong bảng rooms (Postgres)"""
         try:
-            if not DatabaseManager.column_exists('Rooms', 'GroupAvatar'):
-                query = "ALTER TABLE Rooms ADD GroupAvatar NVARCHAR(500) NULL"
+            # PostgreSQL dùng TEXT hoặc VARCHAR thay cho NVARCHAR
+            if not DatabaseManager.column_exists('rooms', 'groupavatar'):
+                query = "ALTER TABLE rooms ADD COLUMN groupavatar TEXT NULL"
                 DatabaseManager.execute_query(query)
-                app_logger.info("Added GroupAvatar column to Rooms table")
+                app_logger.info("Added groupavatar column to rooms table")
         except Exception as e:
             app_logger.error(f"Ensure group avatar column error: {e}")
 
     @staticmethod
     def update_group_avatar(room_id, avatar_url):
-        """Update group avatar for a room"""
+        """Cập nhật ảnh đại diện cho phòng chat"""
         try:
             DatabaseManager.ensure_group_avatar_column()
-            query = "UPDATE Rooms SET GroupAvatar = ? WHERE RoomID = ?"
+            query = "UPDATE rooms SET groupavatar = ? WHERE roomid = ?"
             DatabaseManager.execute_query(query, (avatar_url, room_id))
             return True
         except Exception as e:
@@ -2716,10 +2967,10 @@ def get_search_suggestions(user_id, query):
 
     @staticmethod
     def get_group_avatar(room_id):
-        """Get group avatar for a room"""
+        """Lấy link ảnh đại diện của phòng chat"""
         try:
             DatabaseManager.ensure_group_avatar_column()
-            query = "SELECT GroupAvatar FROM Rooms WHERE RoomID = ?"
+            query = "SELECT groupavatar FROM rooms WHERE roomid = ?"
             result = DatabaseManager.execute_query(query, (room_id,), fetch_one=True)
             return result[0] if result and result[0] else None
         except Exception as e:
@@ -2728,35 +2979,38 @@ def get_search_suggestions(user_id, query):
 
     @staticmethod
     def ensure_muted_rooms_table():
-        """Ensure MutedRooms table exists"""
+        """Đảm bảo bảng mutedrooms tồn tại trong Postgres"""
         try:
-            if not DatabaseManager.column_exists('MutedRooms', 'MutedRoomID'):
+            if not DatabaseManager.column_exists('mutedrooms', 'mutedroomid'):
+                # SERIAL thay IDENTITY, TIMESTAMP thay DATETIME
                 query = """
-                    CREATE TABLE MutedRooms (
-                        MutedRoomID INT IDENTITY(1,1) PRIMARY KEY,
-                        UserID INT NOT NULL,
-                        RoomID INT NOT NULL,
-                        MutedAt DATETIME DEFAULT GETDATE(),
-                        FOREIGN KEY (UserID) REFERENCES Users(UserID),
-                        FOREIGN KEY (RoomID) REFERENCES Rooms(RoomID),
-                        UNIQUE(UserID, RoomID)
+                    CREATE TABLE mutedrooms (
+                        mutedroomid SERIAL PRIMARY KEY,
+                        userid INT NOT NULL,
+                        roomid INT NOT NULL,
+                        mutedat TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        FOREIGN KEY (userid) REFERENCES users(userid),
+                        FOREIGN KEY (roomid) REFERENCES rooms(roomid),
+                        UNIQUE(userid, roomid)
                     )
                 """
                 DatabaseManager.execute_query(query)
-                app_logger.info("Created MutedRooms table")
+                app_logger.info("Created mutedrooms table")
         except Exception as e:
             app_logger.error(f"Ensure muted rooms table error: {e}")
 
     @staticmethod
     def mute_room(user_id, room_id):
-        """Mute notifications for a room"""
+        """Tắt thông báo cho một phòng chat"""
         try:
             DatabaseManager.ensure_muted_rooms_table()
-            # Check if already muted
-            check_query = "SELECT 1 FROM MutedRooms WHERE UserID = ? AND RoomID = ?"
+            # Kiểm tra xem đã tắt thông báo chưa
+            # Postgres sử dụng tên bảng/cột viết thường để tránh lỗi phân biệt hoa thường
+            check_query = "SELECT 1 FROM mutedrooms WHERE userid = ? AND roomid = ?"
             exists = DatabaseManager.execute_query(check_query, (user_id, room_id), fetch_one=True)
+            
             if not exists:
-                insert_query = "INSERT INTO MutedRooms (UserID, RoomID) VALUES (?, ?)"
+                insert_query = "INSERT INTO mutedrooms (userid, roomid) VALUES (?, ?)"
                 DatabaseManager.execute_query(insert_query, (user_id, room_id))
             return True
         except Exception as e:
@@ -2765,10 +3019,10 @@ def get_search_suggestions(user_id, query):
 
     @staticmethod
     def unmute_room(user_id, room_id):
-        """Unmute notifications for a room"""
+        """Bật lại thông báo cho một phòng chat"""
         try:
             DatabaseManager.ensure_muted_rooms_table()
-            query = "DELETE FROM MutedRooms WHERE UserID = ? AND RoomID = ?"
+            query = "DELETE FROM mutedrooms WHERE userid = ? AND roomid = ?"
             DatabaseManager.execute_query(query, (user_id, room_id))
             return True
         except Exception as e:
@@ -2777,10 +3031,10 @@ def get_search_suggestions(user_id, query):
 
     @staticmethod
     def is_room_muted(user_id, room_id):
-        """Check if a room is muted for a user"""
+        """Kiểm tra trạng thái tắt thông báo của một phòng"""
         try:
             DatabaseManager.ensure_muted_rooms_table()
-            query = "SELECT 1 FROM MutedRooms WHERE UserID = ? AND RoomID = ?"
+            query = "SELECT 1 FROM mutedrooms WHERE userid = ? AND roomid = ?"
             result = DatabaseManager.execute_query(query, (user_id, room_id), fetch_one=True)
             return result is not None
         except Exception as e:
@@ -2789,11 +3043,12 @@ def get_search_suggestions(user_id, query):
 
     @staticmethod
     def get_muted_rooms(user_id):
-        """Get all muted rooms for a user"""
+        """Lấy danh sách ID của tất cả các phòng đã tắt thông báo"""
         try:
             DatabaseManager.ensure_muted_rooms_table()
-            query = "SELECT RoomID FROM MutedRooms WHERE UserID = ?"
+            query = "SELECT roomid FROM mutedrooms WHERE userid = ?"
             results = DatabaseManager.execute_query(query, (user_id,), fetch_all=True)
+            # Trả về list ID đơn giản để dễ dàng xử lý ở Front-end
             return [r[0] for r in results]
         except Exception as e:
             app_logger.error(f"Get muted rooms error: {e}")
@@ -2801,52 +3056,56 @@ def get_search_suggestions(user_id, query):
 
     @staticmethod
     def ensure_room_roles_table():
-        """Ensure RoomRoles table exists"""
+        """Đảm bảo bảng roomroles tồn tại trong Postgres"""
         try:
-            if not DatabaseManager.column_exists('RoomRoles', 'RoleID'):
+            if not DatabaseManager.column_exists('roomroles', 'roleid'):
+                # SERIAL thay IDENTITY, VARCHAR thay NVARCHAR, TIMESTAMP thay DATETIME
                 query = """
-                    CREATE TABLE RoomRoles (
-                        RoleID INT IDENTITY(1,1) PRIMARY KEY,
-                        RoomID INT NOT NULL,
-                        UserID INT NOT NULL,
-                        Role NVARCHAR(50) DEFAULT 'Member',
-                        AssignedAt DATETIME DEFAULT GETDATE(),
-                        FOREIGN KEY (RoomID) REFERENCES Rooms(RoomID),
-                        FOREIGN KEY (UserID) REFERENCES Users(UserID),
-                        UNIQUE(RoomID, UserID)
+                    CREATE TABLE roomroles (
+                        roleid SERIAL PRIMARY KEY,
+                        roomid INT NOT NULL,
+                        userid INT NOT NULL,
+                        role VARCHAR(50) DEFAULT 'Member',
+                        assignedat TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        FOREIGN KEY (roomid) REFERENCES rooms(roomid),
+                        FOREIGN KEY (userid) REFERENCES users(userid),
+                        UNIQUE(roomid, userid)
                     )
                 """
                 DatabaseManager.execute_query(query)
-                app_logger.info("Created RoomRoles table")
+                app_logger.info("Created roomroles table")
         except Exception as e:
             app_logger.error(f"Ensure room roles table error: {e}")
 
     @staticmethod
     def assign_role(room_id, user_id, role):
-        """Assign a role to a user in a room"""
+        """Gán quyền cho người dùng trong phòng chat"""
         try:
             DatabaseManager.ensure_room_roles_table()
-            # Validate role
+            
+            # Kiểm tra tính hợp lệ của quyền
             valid_roles = ['Admin', 'Moderator', 'Member']
             if role not in valid_roles:
                 role = 'Member'
-            # Check if role exists
-            check_query = "SELECT 1 FROM RoomRoles WHERE RoomID = ? AND UserID = ?"
+                
+            # Kiểm tra xem người dùng đã có quyền trong phòng này chưa
+            check_query = "SELECT 1 FROM roomroles WHERE roomid = ? AND userid = ?"
             exists = DatabaseManager.execute_query(check_query, (room_id, user_id), fetch_one=True)
+            
             if exists:
-                update_query = "UPDATE RoomRoles SET Role = ? WHERE RoomID = ? AND UserID = ?"
+                update_query = "UPDATE roomroles SET role = ? WHERE roomid = ? AND userid = ?"
                 DatabaseManager.execute_query(update_query, (role, room_id, user_id))
             else:
-                insert_query = "INSERT INTO RoomRoles (RoomID, UserID, Role) VALUES (?, ?, ?)"
+                insert_query = "INSERT INTO roomroles (roomid, userid, role) VALUES (?, ?, ?)"
                 DatabaseManager.execute_query(insert_query, (room_id, user_id, role))
 
-            # Try to keep RoomParticipants.Role column in sync for compatibility
+            # Đồng bộ với bảng roomparticipants để đảm bảo tính tương thích
             try:
-                if DatabaseManager.column_exists('RoomParticipants', 'Role'):
-                    update_q = "UPDATE RoomParticipants SET Role = ? WHERE RoomID = ? AND UserID = ?"
-                    DatabaseManager.execute_query(update_q, (role, room_id, user_id))
+                if DatabaseManager.column_exists('roomparticipants', 'role'):
+                    sync_query = "UPDATE roomparticipants SET role = ? WHERE roomid = ? AND userid = ?"
+                    DatabaseManager.execute_query(sync_query, (role, room_id, user_id))
             except Exception as e:
-                app_logger.warning(f"Could not sync RoomParticipants.Role for user {user_id} in room {room_id}: {e}")
+                app_logger.warning(f"Sync RoomParticipants.role failed: {e}")
 
             return True
         except Exception as e:
@@ -2855,11 +3114,12 @@ def get_search_suggestions(user_id, query):
 
     @staticmethod
     def get_user_role(room_id, user_id):
-        """Get user's role in a room"""
+        """Lấy quyền hiện tại của người dùng trong phòng"""
         try:
             DatabaseManager.ensure_room_roles_table()
-            query = "SELECT Role FROM RoomRoles WHERE RoomID = ? AND UserID = ?"
+            query = "SELECT role FROM roomroles WHERE roomid = ? AND userid = ?"
             result = DatabaseManager.execute_query(query, (room_id, user_id), fetch_one=True)
+            # Mặc định là Member nếu không tìm thấy dữ liệu
             return result[0] if result else 'Member'
         except Exception as e:
             app_logger.error(f"Get user role error: {e}")
@@ -2867,23 +3127,27 @@ def get_search_suggestions(user_id, query):
 
     @staticmethod
     def get_room_members_with_roles(room_id):
-        """Get all members of a room with their roles"""
+        """Lấy danh sách thành viên trong phòng kèm theo quyền hạn (Postgres)"""
         try:
             DatabaseManager.ensure_room_roles_table()
+            # Sử dụng LEFT JOIN để đảm bảo ngay cả khi chưa có bản ghi trong roomroles, 
+            # thành viên vẫn hiện ra với quyền mặc định.
             query = """
-                SELECT u.UserID, u.FullName, u.Username, u.Status, rr.Role
-                FROM Users u
-                JOIN RoomParticipants rp ON u.UserID = rp.UserID
-                LEFT JOIN RoomRoles rr ON u.UserID = rr.UserID AND rp.RoomID = rr.RoomID
-                WHERE rp.RoomID = ?
+                SELECT u.userid, u.fullname, u.username, u.status, rr.role
+                FROM users u
+                JOIN roomparticipants rp ON u.userid = rp.userid
+                LEFT JOIN roomroles rr ON u.userid = rr.userid AND rp.roomid = rr.roomid
+                WHERE rp.roomid = ?
             """
             results = DatabaseManager.execute_query(query, (room_id,), fetch_all=True)
+            
+            # Trả về danh sách dictionary để Tới dễ dàng đổ dữ liệu lên UI (HTML/React/Flutter)
             return [{
                 'user_id': r[0],
                 'full_name': r[1],
                 'username': r[2],
                 'status': r[3],
-                'role': r[4] or 'Member'
+                'role': r[4] if r[4] else 'Member'
             } for r in results]
         except Exception as e:
             app_logger.error(f"Get room members with roles error: {e}")
@@ -2891,16 +3155,18 @@ def get_search_suggestions(user_id, query):
 
     @staticmethod
     def remove_role(room_id, user_id):
-        """Remove a user's role (reset to Member)"""
+        """Xóa quyền hạn đặc biệt của người dùng (Reset về Member)"""
         try:
             DatabaseManager.ensure_room_roles_table()
-            query = "DELETE FROM RoomRoles WHERE RoomID = ? AND UserID = ?"
+            # Trong Postgres, chỉ cần xóa dòng tương ứng trong roomroles, 
+            # logic get_room_members_with_roles sẽ tự hiểu là 'Member'.
+            query = "DELETE FROM roomroles WHERE roomid = ? AND userid = ?"
             DatabaseManager.execute_query(query, (room_id, user_id))
             return True
         except Exception as e:
             app_logger.error(f"Remove role error: {e}")
             return False
 
-# Initialize database tables
-DatabaseManager.ensure_room_participants_table()
-DatabaseManager.ensure_user_auth_columns()
+# Khởi tạo các bảng cần thiết khi chạy ứng dụng
+    DatabaseManager.ensure_room_participants_table()
+    DatabaseManager.ensure_user_auth_columns()
