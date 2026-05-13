@@ -2721,11 +2721,12 @@ def get_search_suggestions(user_id, query):
         """Mute notifications for a room"""
         try:
             DatabaseManager.ensure_muted_rooms_table()
-            query = """
-                IF NOT EXISTS (SELECT 1 FROM MutedRooms WHERE UserID = ? AND RoomID = ?)
-                INSERT INTO MutedRooms (UserID, RoomID) VALUES (?, ?)
-            """
-            DatabaseManager.execute_query(query, (user_id, room_id, user_id, room_id))
+            # Check if already muted
+            check_query = "SELECT 1 FROM MutedRooms WHERE UserID = ? AND RoomID = ?"
+            exists = DatabaseManager.execute_query(check_query, (user_id, room_id), fetch_one=True)
+            if not exists:
+                insert_query = "INSERT INTO MutedRooms (UserID, RoomID) VALUES (?, ?)"
+                DatabaseManager.execute_query(insert_query, (user_id, room_id))
             return True
         except Exception as e:
             app_logger.error(f"Mute room error: {e}")
@@ -2798,13 +2799,15 @@ def get_search_suggestions(user_id, query):
             valid_roles = ['Admin', 'Moderator', 'Member']
             if role not in valid_roles:
                 role = 'Member'
-            query = """
-                IF EXISTS (SELECT 1 FROM RoomRoles WHERE RoomID = ? AND UserID = ?)
-                    UPDATE RoomRoles SET Role = ? WHERE RoomID = ? AND UserID = ?
-                ELSE
-                    INSERT INTO RoomRoles (RoomID, UserID, Role) VALUES (?, ?, ?)
-            """
-            DatabaseManager.execute_query(query, (room_id, user_id, role, room_id, user_id, room_id, user_id, role))
+            # Check if role exists
+            check_query = "SELECT 1 FROM RoomRoles WHERE RoomID = ? AND UserID = ?"
+            exists = DatabaseManager.execute_query(check_query, (room_id, user_id), fetch_one=True)
+            if exists:
+                update_query = "UPDATE RoomRoles SET Role = ? WHERE RoomID = ? AND UserID = ?"
+                DatabaseManager.execute_query(update_query, (role, room_id, user_id))
+            else:
+                insert_query = "INSERT INTO RoomRoles (RoomID, UserID, Role) VALUES (?, ?, ?)"
+                DatabaseManager.execute_query(insert_query, (room_id, user_id, role))
 
             # Try to keep RoomParticipants.Role column in sync for compatibility
             try:
