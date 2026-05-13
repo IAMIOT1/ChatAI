@@ -18,7 +18,6 @@ from dotenv import load_dotenv
 from logger_config import app_logger
 from io import BytesIO, StringIO
 import database
-from database import init_db_from_file
 import psycopg2
 
 
@@ -59,6 +58,7 @@ from database import init_db_from_file
 # Gọi ngay trước khi chạy app
 
 app = Flask(__name__)
+force_init_db()
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', '1871020578')
 app.config.update(
     MAIL_SERVER=os.environ.get('MAIL_SERVER', 'smtp.gmail.com'),
