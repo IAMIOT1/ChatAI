@@ -194,7 +194,7 @@ class DatabaseManager:
         try:
             app_logger.info(f"Checking/creating RoomParticipants table")
             query = """
-                IF OBJECT_ID('RoomParticipants', 'U') IS NULL
+                CREATE TABLE IF NOT EXISTS('RoomParticipants', 'U') IS NULL
                 BEGIN
                     CREATE TABLE RoomParticipants (
                         RoomID INT NOT NULL,
@@ -1609,6 +1609,37 @@ def is_room_member(room_id, user_id):
     except Exception as e:
         app_logger.error(f"Is room member error: {e}")
         return False
+
+        
+@staticmethod
+def ensure_room_participants_table():
+    """Ensure RoomParticipants table exists"""
+    try:
+        app_logger.info("Checking/creating RoomParticipants table")
+        query = """
+            IF NOT EXISTS (
+                SELECT 1 
+                FROM sys.objects 
+                WHERE object_id = OBJECT_ID('RoomParticipants', 'U') 
+                    AND type in (N'U')
+            )
+            BEGIN
+                CREATE TABLE RoomParticipants (
+                    RoomID INT NOT NULL,
+                    UserID INT NOT NULL,
+                    JoinedAt DATETIME DEFAULT GETDATE(),
+                    PRIMARY KEY (RoomID, UserID),
+                    FOREIGN KEY (RoomID) REFERENCES Rooms(RoomID),
+                    FOREIGN KEY (UserID) REFERENCES Users(UserID)
+                )
+            END
+        """
+        DatabaseManager.execute_query(query)
+        app_logger.info("RoomParticipants table checked/created successfully")
+    except Exception as e:
+        app_logger.error(f"RoomParticipants table creation error: {e}")
+
+
 
 @staticmethod
 def get_group_members(room_id):
