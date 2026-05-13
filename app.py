@@ -18,15 +18,14 @@ from dotenv import load_dotenv
 from logger_config import app_logger
 from io import BytesIO, StringIO
 import database
+from database import init_db_from_file
 
 # Load environment variables from .env file
 load_dotenv()
 from database import init_db_from_file
 
 # Gọi ngay trước khi chạy app
-if __name__ == "__main__":
-    init_db_from_file() # Tự động đẩy SQL lên khi app khởi động
-    app.run()
+
 app = Flask(__name__)
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', '1871020578')
 app.config.update(
@@ -76,7 +75,6 @@ else:
     conn_str += f"UID={db_user};PWD={db_password};"
 
 conn_str += "Encrypt=yes;TrustServerCertificate=yes;"
-
 
 ensure_room_participants_table = database.DatabaseManager.ensure_room_participants_table
 ensure_user_auth_columns = database.DatabaseManager.ensure_user_auth_columns
@@ -2808,7 +2806,9 @@ def analytics_export():
         app_logger.error(f"Lỗi analytics export: {e}")
         return jsonify({'success': False, 'message': f'Lỗi: {str(e)}'})
 
-
+if __name__ == "__main__":
+    init_db_from_file() # Tự động đẩy SQL lên khi app khởi động
+    app.run()
 if __name__ == "__main__":
     import webbrowser
     port = int(os.environ.get("PORT", 8888))
@@ -2821,3 +2821,7 @@ if __name__ == "__main__":
     print("Đang mở trình duyệt...")
     webbrowser.open(url)
     socketio.run(app, debug=True, host="127.0.0.1", port=port)
+
+if __name__ == "__main__":
+    init_db_from_file() # Tự động đẩy SQL lên khi app khởi động
+    app.run()
