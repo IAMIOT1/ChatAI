@@ -23,6 +23,7 @@ import psycopg2
 
 
 # Hàm này sẽ chạy NGAY LẬP TỨC khi app khởi động
+# Trong file app.py
 def force_init_db():
     db_url = os.environ.get('DATABASE_URL')
     if db_url and db_url.startswith("postgres://"):
@@ -32,21 +33,25 @@ def force_init_db():
         conn = psycopg2.connect(db_url)
         cur = conn.cursor()
         
-        # Đọc file SQL và chạy trực tiếp
-        if os.path.exists('SQLQuery1.sql'):
-            with open('SQLQuery1.sql', 'r', encoding='utf-8') as f:
-                sql_script = f.read()
-                cur.execute(sql_script)
-                conn.commit()
-                print("--- ĐÃ TẠO BẢNG THÀNH CÔNG TỪ FILE SQL ---")
+        with open('SQLQuery1.sql', 'r', encoding='utf-8-sig') as f:
+            # Đọc toàn bộ file và tách theo dấu chấm phẩy
+            content = f.read()
+            # Lưu ý: Không tách ở các dấu ; bên trong hàm (Function)
+            # Ở đây mình tạm dùng cách chạy cả khối nếu có FUNCTION
+            if "FUNCTION" in content:
+                cur.execute(content)
+            else:
+                commands = content.split(';')
+                for cmd in commands:
+                    if cmd.strip():
+                        cur.execute(cmd)
+            
+        conn.commit()
+        print("--- ĐÃ KHỞI TẠO XONG TOÀN BỘ DATABASE VÀ FUNCTION ---")
         cur.close()
         conn.close()
     except Exception as e:
-        print(f"--- LỖI KHỞI TẠO DB: {e} ---")
-
-# Gọi hàm ngay tại đây
-force_init_db()
-
+        print(f"--- LỖI DB: {e} ---")
 # Load environment variables from .env file
 load_dotenv()
 from database import init_db_from_file
