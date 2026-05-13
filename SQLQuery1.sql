@@ -1,4 +1,4 @@
-﻿CREATE TABLE IF NOT EXISTS users (
+CREATE TABLE IF NOT EXISTS users (
     userid SERIAL PRIMARY KEY,
     username VARCHAR(50) UNIQUE NOT NULL,
     fullname VARCHAR(100),
