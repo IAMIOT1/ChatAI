@@ -10,6 +10,46 @@ from datetime import datetime, timedelta
 from werkzeug.security import generate_password_hash
 from logger_config import app_logger
 
+def init_db_from_file():
+    # 1. Lấy link database xịn từ Render
+    db_url = os.environ.get('DATABASE_URL')
+    if not db_url:
+        print("Lỗi: Không tìm thấy biến DATABASE_URL trên Render!")
+        return
+
+    # 2. Đường dẫn tới file SQL (nằm cùng thư mục với database.py)
+    sql_file_path = os.path.join(os.path.dirname(__file__), 'SQLQuery1.sql')
+
+    if not os.path.exists(sql_file_path):
+        print(f"Lỗi: Không tìm thấy file {sql_file_path}")
+        return
+
+    conn = None
+    try:
+        # 3. Kết nối tới PostgreSQL của Render
+        conn = psycopg2.connect(db_url)
+        cur = conn.cursor()
+        
+        # 4. Đọc file SQL
+        with open(sql_file_path, 'r', encoding='utf-8') as f:
+            sql_script = f.read()
+        
+        # 5. Chạy toàn bộ file SQL
+        print("Đang đẩy file SQL lên database...")
+        cur.execute(sql_script)
+        
+        conn.commit()
+        cur.close()
+        print("Chúc mừng Tới! Đã khởi tạo database thành công từ file SQL.")
+        
+    except (Exception, psycopg2.DatabaseError) as error:
+        print(f"Lỗi khi chạy file SQL: {error}")
+    finally:
+        if conn is not None:
+            conn.close()
+
+if __name__ == "__main__":
+    init_db_from_file()
 class Config:
     def __init__(self):
         # Ưu tiên lấy link PostgreSQL từ Render
@@ -33,6 +73,7 @@ class Config:
 config = Config()
 
 class DatabaseManager:
+    
     @staticmethod
     def get_db_connection():
         try:
