@@ -21,7 +21,12 @@ import database
 
 # Load environment variables from .env file
 load_dotenv()
+from database import init_db_from_file
 
+# Gọi ngay trước khi chạy app
+if __name__ == "__main__":
+    init_db_from_file() # Tự động đẩy SQL lên khi app khởi động
+    app.run()
 app = Flask(__name__)
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', '1871020578')
 app.config.update(
