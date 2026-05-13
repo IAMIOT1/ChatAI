@@ -79,6 +79,39 @@ class Config:
 config = Config()
 
 class DatabaseManager:
+    @staticmethod
+    def init_db_from_file():
+
+        conn = None
+
+        try:
+
+            conn = DatabaseManager.get_db_connection()
+
+            conn.autocommit = True
+
+            cursor = conn.cursor()
+
+            sql_path = os.path.join(
+                os.path.dirname(__file__),
+                "SQLQuery1.sql"
+            )
+
+            with open(sql_path, "r", encoding="utf-8") as f:
+                sql = f.read()
+
+            cursor.execute(sql)
+
+            print("=== ĐÃ KHỞI TẠO DATABASE ===")
+
+        except Exception as e:
+
+            print(f"--- LỖI DB: {e} ---")
+
+        finally:
+
+            if conn:
+                conn.close()
     
     @staticmethod
     def get_db_connection():
