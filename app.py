@@ -2840,18 +2840,17 @@ def analytics_export():
 
 
 if __name__ == "__main__":
-    import webbrowser
-    port = int(os.environ.get("PORT", 8888))
-    url = f"http://127.0.0.1:{port}"
-    print("CHATAI APPLICATION")
-    print(f"LINK: {url}")
-    print("Click vào link hoặc Ctrl+Click để mở trong trình duyệt")
-    print("Nhấp vào nút bên dưới để mở link:")
-    print(f"[{url}]({url})")
-    print("Đang mở trình duyệt...")
-    webbrowser.open(url)
-    socketio.run(app, debug=True, host="127.0.0.1", port=port)
 
-if __name__ == "__main__":
-    init_db_from_file() # Tự động đẩy SQL lên khi app khởi động
-    app.run()
+    init_db_from_file()
+
+    port = int(os.environ.get("PORT", 10000))
+
+    print("=== CHATAI APPLICATION ===")
+    print(f"PORT: {port}")
+
+    socketio.run(
+        app,
+        host="0.0.0.0",
+        port=port,
+        debug=False
+    )
