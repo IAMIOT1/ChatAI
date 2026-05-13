@@ -2841,12 +2841,11 @@ def analytics_export():
 
 if __name__ == "__main__":
 
-    init_db_from_file()
+    database.DatabaseManager.init_db_from_file()
 
     port = int(os.environ.get("PORT", 10000))
 
     print("=== CHATAI APPLICATION ===")
-    print(f"PORT: {port}")
 
     socketio.run(
         app,
