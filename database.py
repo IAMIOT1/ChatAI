@@ -117,14 +117,23 @@ class DatabaseManager:
     def get_db_connection():
         try:
             if config.database_url:
+                db_url = config.database_url
+                
+                # Render bắt buộc phải có SSL để kết nối PostgreSQL
+                if "sslmode=require" not in db_url:
+                    if "?" in db_url:
+                        db_url += "&sslmode=require"
+                    else:
+                        db_url += "?sslmode=require"
+                        
                 # Kết nối PostgreSQL (Render)
-                return psycopg2.connect(config.database_url)
+                return psycopg2.connect(db_url)
+                
             # Kết nối SQL Server (Máy nhà)
             return pyodbc.connect(config.conn_str)
         except Exception as e:
             app_logger.error(f"Database connection error: {e}")
             raise
-
     @staticmethod
     def execute_query(query, params=None, fetch_one=False, fetch_all=False):
         conn = None
