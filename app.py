@@ -21,20 +21,34 @@ import database
 import psycopg2
 from flask import send_from_directory
 
-with open("SQLQuery1.sql", "r", encoding="utf-8") as f:
-    sql = f.read()
 # Hàm này sẽ chạy NGAY LẬP TỨC khi app khởi động
 # Trong file app.py
 def force_init_db():
     db_url = os.environ.get('DATABASE_URL')
-    if db_url and db_url.startswith("postgres://"):
+    
+    if not db_url:
+        print("--- LỖI: Không tìm thấy DATABASE_URL ---")
+        return
+
+    if db_url.startswith("postgres://"):
         db_url = db_url.replace("postgres://", "postgresql://", 1)
+        
+    # BẮT BUỘC: Thêm tham số sslmode=require cho database trên Render
+    if "sslmode" not in db_url:
+        if "?" in db_url:
+            db_url += "&sslmode=require"
+        else:
+            db_url += "?sslmode=require"
     
     try:
         conn = psycopg2.connect(db_url)
         cur = conn.cursor()
         
-        with open('SQLQuery1.sql', 'r', encoding='utf-8-sig') as f:
+        # SỬA LỖI ĐƯỜNG DẪN: Dùng đường dẫn tuyệt đối để Linux trên Render đọc được file
+        base_dir = os.path.abspath(os.path.dirname(__file__))
+        sql_file_path = os.path.join(base_dir, "SQLQuery1.sql")
+        
+        with open(sql_file_path, 'r', encoding='utf-8-sig') as f:
             # Đọc toàn bộ file và tách theo dấu chấm phẩy
             content = f.read()
             # Lưu ý: Không tách ở các dấu ; bên trong hàm (Function)
@@ -53,8 +67,6 @@ def force_init_db():
         conn.close()
     except Exception as e:
         print(f"--- LỖI DB: {e} ---")
-# Load environment variables from .env file
-load_dotenv()
 
 # Gọi ngay trước khi chạy app
 
