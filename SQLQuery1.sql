@@ -44,7 +44,9 @@ CREATE TABLE IF NOT EXISTS messages (
 
     sentat TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 
-    messagetype VARCHAR(20) DEFAULT 'Text'
+    messagetype VARCHAR(20) DEFAULT 'Text',
+
+    isread INT DEFAULT 0
 );
 
 CREATE OR REPLACE FUNCTION getchathistory(
