@@ -2934,8 +2934,7 @@
 
         function getCurrentUserId() {
             // Lấy user ID hiện tại (có thể lưu trong session hoặc hidden input)
-            return {{ session.get('user_id', 'null') }
-        };
+            return {{ session.get('user_id', 'null') | tojson }};
         }
 
         // Yêu cầu danh sách user online khi kết nối
