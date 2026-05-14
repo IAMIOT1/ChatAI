@@ -1865,36 +1865,41 @@
             <p style="padding: 15px; color: #999; font-size: 13px;">Chưa có chat riêng</p>
             {% endif %}
 
-            <!-- PHẦN NHÓM CHAT (ĐỔ TỪ SQL) -->
-            <div class="section-title">Nhóm của tôi <i class="fas fa-plus-circle" style="cursor:pointer"
-                    onclick="showCreateGroup()"></i></div>
-            {% if rooms %}
-            {% for room in rooms %}
-            <div id="room-item-{{ room['room_id'] }}" class="user-item"
-                onclick="selectRoom({{ room['room_id'] }}, '{{ room['room_name'] }}')"
-                data-room-id="{{ room['room_id'] }}" data-is-group="true">
-                <div class="room-avatar">
-                    {% if room['group_avatar'] %}
-                    <img src="{{ room['group_avatar'] }}" alt="{{ room['room_name'] }}" class="group-avatar-img">
-                    {% else %}
-                    <div class="avatar-placeholder">{{ room['room_name'][0]|upper }}</div>
-                    {% endif %}
-                </div>
-                <div class="room-info">
-                    <div class="room-name">{{ room['room_name'] }}</div>
-                    <div class="room-preview" id="preview-{{ room['room_id'] }}"></div>
-                </div>
-                <div class="room-meta">
-                    <div class="room-time" id="time-{{ room['room_id'] }}"></div>
-                    <div class="unread-badge" id="badge-{{ room['room_id'] }}" style="display:none;"></div>
-                </div>
-                <div class="room-actions">
-                    <!-- Actions moved to chat header toolbar when a group is selected -->
-                </div>
+            <div class="section-title">
+                Nhóm của tôi 
+                {# Chỉ hiện nút cộng nếu có từ 2 bạn bè trở lên #}
+                {% if private_rooms and private_rooms|length >= 2 %}
+                    <i class="fas fa-plus-circle" onclick="showCreateGroup()"></i>
+                {% endif %}
             </div>
-            {% endfor %}
+
+            {% if rooms %}
+                {% for room in rooms %}
+                <div id="room-item-{{ room['room_id'] }}" class="user-item"
+                    onclick="selectRoom({{ room['room_id'] }}, '{{ room['room_name'] }}')"
+                    data-room-id="{{ room['room_id'] }}" data-is-group="true">
+                    <div class="room-avatar">
+                        {% if room['group_avatar'] %}
+                        <img src="{{ room['group_avatar'] }}" alt="{{ room['room_name'] }}" class="group-avatar-img">
+                        {% else %}
+                        <div class="avatar-placeholder">{{ room['room_name'][0]|upper }}</div>
+                        {% endif %}
+                    </div>
+                    <div class="room-info">
+                        <div class="room-name">{{ room['room_name'] }}</div>
+                        <div class="room-preview" id="preview-{{ room['room_id'] }}"></div>
+                    </div>
+                    </div>
+                {% endfor %}
             {% else %}
-            <p style="padding: 15px; color: #999; font-size: 13px;">Chưa có nhóm nào</p>
+                {# Nếu chưa có nhóm và cũng chưa đủ bạn bè để tạo thì có thể ẩn luôn dòng này hoặc để nhắc nhở #}
+                {% if friends and friends|length < 2 %}
+                    <p style="padding: 10px 15px; color: #f39c12; font-size: 12px; font-style: italic;">
+                        Kết bạn thêm 2 người để tạo nhóm
+                    </p>
+                {% else %}
+                    <p style="padding: 15px; color: #999; font-size: 13px;">Chưa có nhóm nào</p>
+                {% endif %}
             {% endif %}
 
             <!-- PHẦN BẠN BÈ (ĐỔ TỪ SQL) -->

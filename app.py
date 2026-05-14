@@ -297,15 +297,47 @@ def index():
 def create_group():
     if 'user_id' not in session:
         return jsonify({'success': False, 'message': 'Chưa đăng nhập'})
+    
+    user_id = session['user_id']
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    # Đếm số lượng phòng chat RIÊNG (is_group = FALSE) mà user này tham gia
+    # Mỗi phòng chat riêng tương ứng với 1 người bạn
+    query_friend_count = """
+        SELECT COUNT(*) 
+        FROM Rooms r
+        JOIN RoomParticipants rp ON r.room_id = rp.room_id
+        WHERE rp.user_id = %s AND r.is_group = FALSE
+    """
+    cursor.execute(query_friend_count, (user_id,))
+    friend_count = cursor.fetchone()[0]
+
+    # Kiểm tra điều kiện 2 bạn bè
+    if friend_count < 2:
+        cursor.close()
+        conn.close()
+        return jsonify({'success': False, 'message': 'Bạn cần chat riêng với ít nhất 2 người để có thể tạo nhóm!'})
+
+    # Nếu đủ điều kiện, tiếp tục xử lý tạo nhóm
     data = request.get_json() or {}
     group_name = data.get('name', '').strip()
+    
     if not group_name:
+        cursor.close()
+        conn.close()
         return jsonify({'success': False, 'message': 'Tên nhóm không được để trống'})
-    room_id = create_group_room(session['user_id'], group_name)
+
+    # Gọi hàm tạo nhóm (đảm bảo hàm này đã tồn tại trong app.py của Tới)
+    room_id = create_group_room(user_id, group_name)
+    
+    cursor.close()
+    conn.close()
+
     if not room_id:
         return jsonify({'success': False, 'message': 'Không tạo được nhóm'})
+        
     return jsonify({'success': True, 'room_id': room_id, 'room_name': group_name})
-
 
 @app.route('/private_room/<int:target_user_id>')
 def private_room(target_user_id):
