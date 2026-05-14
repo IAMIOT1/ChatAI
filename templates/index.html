@@ -3510,8 +3510,7 @@
 
         // Socket event handler for mentions
         socket.on('user_mentioned', function (data) {
-            if (data.mentioned_user_id === {{ session['user_id'] }
-        }) {
+            if (data.mentioned_user_id === {{ session['user_id'] }}) {
             // Show notification for mention
             var notification = document.createElement('div');
             notification.style.cssText = 'position: fixed; top: 20px; right: 20px; background: #0091ff; color: white; padding: 15px 20px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.2); z-index: 9999; animation: slideIn 0.3s ease;';
