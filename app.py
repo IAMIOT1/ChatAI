@@ -19,6 +19,7 @@ from logger_config import app_logger
 from io import BytesIO, StringIO
 import database
 import psycopg2
+from flask import send_from_directory
 
 with open("SQLQuery1.sql", "r", encoding="utf-8") as f:
     sql = f.read()
@@ -2838,7 +2839,9 @@ def analytics_export():
         app_logger.error(f"Lỗi analytics export: {e}")
         return jsonify({'success': False, 'message': f'Lỗi: {str(e)}'})
 
-
+@app.route('/google4e20d9f91e4489f6.html')
+def google_verification():
+    return send_from_directory('.', 'google4e20d9f91e4489f6.html')
 if __name__ == "__main__":
 
     database.DatabaseManager.init_db_from_file()
