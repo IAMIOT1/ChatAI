@@ -2,6 +2,7 @@
 <html lang="vi">
 
 <head>
+    <meta name="google-site-verification" content="vC_bt4a_MfXM857F_9sdH4DxPMF8SltABsuam9H7pAY" />
     <meta charset="UTF-8">
     <title>Zalo Clone - DNU Edition</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
@@ -2086,19 +2087,23 @@
 
     <script>
         var socket = io();
-        var current_user = "{{ session['user_name']|replace('"', ' & quot; ') }}";
-        var current_room = {{ selected_room_id }};
-        var userRooms = {{ user_rooms| tojson }};
+
+// Cách này giúp tự động xử lý dấu ngoặc và ký tự đặc biệt, không lo lỗi đỏ
+        var current_user = {{ session.get('user_name', '') | tojson | safe }};
+        var current_room = {{ selected_room_id | tojson | safe }};
+        var userRooms = {{ user_rooms | tojson | safe }};
         var typingUsers = {};
 
         function toggleProfile() {
             var panel = document.getElementById('profile-panel');
-            panel.classList.toggle('hidden');
+            if (panel) { // Thêm kiểm tra này để tránh lỗi nếu không tìm thấy ID
+                panel.classList.toggle('hidden');
 
-            // Load user status message and last seen when opening profile
-            if (!panel.classList.contains('hidden')) {
-                loadUserStatusMessage();
-                loadLastSeen();
+                if (!panel.classList.contains('hidden')) {
+                    // Đảm bảo các hàm này đã được định nghĩa ở dưới
+                    if (typeof loadUserStatusMessage === "function") loadUserStatusMessage();
+                    if (typeof loadLastSeen === "function") loadLastSeen();
+                }
             }
         }
 
