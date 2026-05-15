@@ -376,28 +376,37 @@ def search_users():
     search_query = request.args.get('query', '')
     current_user_id = session.get('user_id')
 
-    if not search_query:
+    if not search_query or not current_user_id:
         return jsonify([])
 
-    conn = DatabaseManager.get_db_connection() # Sử dụng Class của bạn
+    conn = DatabaseManager.get_db_connection()
     cursor = conn.cursor()
     
     try:
-        # Tìm kiếm theo số điện thoại (cột phone)
-        # Sử dụng LIKE để người dùng có thể tìm 1 phần số điện thoại
-        query = "SELECT id, username, phone FROM users WHERE phone LIKE %s AND id != %s"
+        # Sử dụng ép kiểu ::text và ::int để Postgres không bắt bẻ
+        query = """
+            SELECT id, username, phone 
+            FROM users 
+            WHERE phone::text LIKE %s 
+            AND id::int != %s::int
+        """
         cursor.execute(query, (f"%{search_query}%", current_user_id))
         
         users = cursor.fetchall()
-        # Chuyển đổi kết quả sang dạng danh sách để JSON hóa
         result = [{"id": u[0], "username": u[1], "phone": u[2]} for u in users]
         return jsonify(result)
     except Exception as e:
-        print(f"Lỗi tìm kiếm: {e}")
+        print(f"Lỗi Postgres: {e}")
         return jsonify({"error": str(e)}), 500
     finally:
         cursor.close()
         conn.close()
+
+@app.route('/api/search_friend', methods=['GET'])
+def search_friend():
+    phone = request.args.get('phone')
+    # Thực hiện câu lệnh SQL: SELECT * FROM Users WHERE Phone = ?
+    # Sau đó trả về kết quả dưới dạng JSON
 
 # Route gửi lời mời kết bạn
 @app.route('/add_friend', methods=['POST'])
