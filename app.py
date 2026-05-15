@@ -373,40 +373,101 @@ def private_room(target_user_id):
 
 @app.route('/search_users', methods=['GET'])
 def search_users():
-    search_query = request.args.get('query', '')
+    search_query = request.args.get('query', '').strip()
     current_user_id = session.get('user_id')
 
     if not search_query or not current_user_id:
         return jsonify([])
 
-    conn = DatabaseManager.get_db_connection()
-    cursor = conn.cursor()
+    conn = None
+    cursor = None
     
     try:
-        # Sử dụng ép kiểu ::text và ::int để Postgres không bắt bẻ
+        conn = DatabaseManager.get_db_connection()
+        cursor = conn.cursor()
+        
+        # CẢI TIẾN: Cho phép tìm kiếm KHÔNG PHÂN BIỆT HOA THƯỜNG (ILIKE) 
+        # theo cả username, fullname HOẶC số điện thoại (phone)
         query = """
             SELECT id, username, phone 
             FROM users 
-            WHERE phone::text LIKE %s 
-            AND id::int != %s::int
+            WHERE (username ILIKE %s OR phone ILIKE %s) 
+              AND id != %s
         """
-        cursor.execute(query, (f"%{search_query}%", current_user_id))
+        # Chuỗi tìm kiếm dạng chứa ký tự nhập vào
+        search_param = f"%{search_query}%"
+        
+        cursor.execute(query, (search_param, search_param, int(current_user_id)))
         
         users = cursor.fetchall()
         result = [{"id": u[0], "username": u[1], "phone": u[2]} for u in users]
         return jsonify(result)
+        
     except Exception as e:
-        print(f"Lỗi Postgres: {e}")
-        return jsonify({"error": str(e)}), 500
+        app_logger.error(f"Lỗi tìm kiếm bạn bè (Postgres): {e}")
+        return jsonify({"error": "Lỗi hệ thống khi tìm kiếm"}), 500
+        
     finally:
-        cursor.close()
-        conn.close()
+        # Đóng kết nối an toàn bảo mật, tránh nghẽn Render
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
 
 @app.route('/api/search_friend', methods=['GET'])
 def search_friend():
-    phone = request.args.get('phone')
-    # Thực hiện câu lệnh SQL: SELECT * FROM Users WHERE Phone = ?
-    # Sau đó trả về kết quả dưới dạng JSON
+    # Lấy số điện thoại từ tham số query truyền lên và xóa khoảng trắng thừa
+    phone = request.args.get('phone', '').strip()
+    current_user_id = session.get('user_id')
+
+    # Nếu không nhập số điện thoại hoặc chưa đăng nhập thì trả về mảng rỗng
+    if not phone or not current_user_id:
+        return jsonify([])
+
+    conn = None
+    cursor = None
+    
+    try:
+        # Lấy kết nối Database chuẩn Postgres
+        conn = DatabaseManager.get_db_connection()
+        cursor = conn.cursor()
+        
+        # Câu lệnh SQL chuẩn Postgres:
+        # 1. Sử dụng cột 'phone' viết thường hoàn toàn khớp với DB thực tế.
+        # 2. Sử dụng '%s' làm placeholder thay vì '?' (Postgres không nhận '?').
+        # 3. Thêm điều kiện 'id != %s' để tự loại trừ chính mình ra khỏi danh sách tìm kiếm bạn bè.
+        query = """
+            SELECT id, username, fullname, phone, status 
+            FROM users 
+            WHERE phone = %s AND id != %s
+        """
+        
+        cursor.execute(query, (phone, int(current_user_id)))
+        user_row = cursor.fetchone()
+        
+        # Nếu tìm thấy người dùng khớp với số điện thoại
+        if user_row:
+            result = {
+                "id": user_row[0],
+                "username": user_row[1],
+                "fullname": user_row[2],
+                "phone": user_row[3],
+                "status": user_row[4]
+            }
+            return jsonify([result]) # Trả về mảng chứa 1 object giống cấu trúc Frontend mong đợi
+            
+        return jsonify([]) # Không tìm thấy thì trả về mảng rỗng
+        
+    except Exception as e:
+        print(f"Lỗi API search_friend: {e}")
+        return jsonify({"error": "Lỗi hệ thống khi tìm kiếm"}), 500
+        
+    finally:
+        # Bắt buộc đóng cursor và connection để không bị nghẽn (treo) DB trên Render
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
 
 # Route gửi lời mời kết bạn
 @app.route('/add_friend', methods=['POST'])
