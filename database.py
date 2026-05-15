@@ -1093,7 +1093,7 @@ class DatabaseManager:
             # SỬA LỖI: Đồng bộ tên cột (dùng gạch dưới)
             # SỬA LỖI: Postgres dùng TRUE/FALSE trực tiếp cho kiểu BOOLEAN
             query = """
-                INSERT INTO users (username, fullname, phone, password_hash, status, is_verified, verification_token, created_at)
+                INSERT INTO users (username, fullname, phone, password_hash, status, is_verified, verification_token, createdat)
                 VALUES (?, ?, ?, ?, 'Offline', ?, ?, CURRENT_TIMESTAMP)
             """
             
@@ -1588,10 +1588,10 @@ class DatabaseManager:
         try:
             # SỬA: Đồng bộ tên cột (id -> user_id, type -> notification_type, ...)
             query = """
-                SELECT id, title, message, notification_type, is_read, created_at
+                SELECT id, title, message, notification_type, is_read, createdat
                 FROM notifications
                 WHERE user_id = ?
-                ORDER BY created_at DESC
+                ORDER BY createdat DESC
             """
             notifications = DatabaseManager.execute_query(query, (user_id,), fetch_all=True)
             
@@ -1601,7 +1601,7 @@ class DatabaseManager:
                 'message': notif[2],
                 'type': notif[3],
                 'is_read': notif[4], # Postgres BOOLEAN trả về chuẩn True/False
-                'created_at': notif[5].strftime('%H:%M %d/%m/%Y') if notif[5] else ''
+                'createdat': notif[5].strftime('%H:%M %d/%m/%Y') if notif[5] else ''
             } for notif in notifications]
         except Exception as e:
             app_logger.error(f"Lỗi lấy thông báo cho user {user_id}: {e}")
@@ -1686,10 +1686,10 @@ class DatabaseManager:
         try:
             # SỬA: Lấy đúng tên cột id (khóa chính), user_id, notification_type
             query = """
-                SELECT id, title, message, notification_type, is_read, created_at
+                SELECT id, title, message, notification_type, is_read, createdat
                 FROM notifications
                 WHERE user_id = ?
-                ORDER BY created_at DESC
+                ORDER BY createdat DESC
             """
             notifications = DatabaseManager.execute_query(query, (user_id,), fetch_all=True)
             
@@ -1699,7 +1699,7 @@ class DatabaseManager:
                 'message': notif[2],
                 'type': notif[3],
                 'is_read': notif[4], # Postgres BOOLEAN trả về True/False trực tiếp
-                'created_at': notif[5].strftime('%H:%M %d/%m/%Y') if notif[5] else ''
+                'createdat': notif[5].strftime('%H:%M %d/%m/%Y') if notif[5] else ''
             } for notif in notifications]
         except Exception as e:
             app_logger.error(f"Lỗi lấy thông báo cho user {user_id}: {e}")
@@ -2051,13 +2051,13 @@ class DatabaseManager:
         try:
             # SỬA: Đồng bộ tên bảng group_invites và các cột room_id, user_id
             query = """
-                SELECT gi.id, gi.room_id, gi.inviter_id, gi.created_at,
+                SELECT gi.id, gi.room_id, gi.inviter_id, gi.createdat,
                     r.room_name, r.avatar_url, u.fullname as inviter_name
                 FROM group_invites gi
                 JOIN rooms r ON gi.room_id = r.id
                 JOIN users u ON gi.inviter_id = u.id
                 WHERE gi.invitee_id = ? AND gi.status = 'Pending'
-                ORDER BY gi.created_at DESC
+                ORDER BY gi.createdat DESC
             """
             invites = DatabaseManager.execute_query(query, (user_id,), fetch_all=True)
             
@@ -2065,7 +2065,7 @@ class DatabaseManager:
                 'invite_id': invite[0],
                 'room_id': invite[1],
                 'inviter_id': invite[2],
-                'created_at': invite[3].strftime('%H:%M %d/%m/%Y') if invite[3] else '',
+                'createdat': invite[3].strftime('%H:%M %d/%m/%Y') if invite[3] else '',
                 'room_name': invite[4],
                 'room_avatar': invite[5],
                 'inviter_name': invite[6]
@@ -2802,7 +2802,7 @@ class DatabaseManager:
                     'email': user[3],
                     'status': user[4],
                     'role': user[5],
-                    'created_at': user[6].strftime('%Y-%m-%d %H:%M:%S') if user[6] else '',
+                    'createdat': user[6].strftime('%Y-%m-%d %H:%M:%S') if user[6] else '',
                     'last_login': user[7].strftime('%Y-%m-%d %H:%M:%S') if user[7] else '',
                     'message_count': user[8]
                 } for user in users],
@@ -3358,13 +3358,13 @@ class DatabaseManager:
             # SỬA: Chuyển toàn bộ tên cột/bảng sang chuẩn gạch dưới (snake_case)
             # Bổ sung alias rõ ràng cho msg.room_id để biết thông báo thuộc phòng nào
             query = """
-                SELECT m.id, m.message_id, m.mentioning_id, m.created_at, m.is_read,
+                SELECT m.id, m.message_id, m.mentioning_id, m.createdat, m.is_read,
                     msg.content, msg.room_id, u.fullname as mentioning_fullname
                 FROM mentions m
                 JOIN messages msg ON m.message_id = msg.id
                 JOIN users u ON m.mentioning_id = u.id
                 WHERE m.mentioned_id = ?
-                ORDER BY m.created_at DESC
+                ORDER BY m.createdat DESC
             """
             mentions_raw = DatabaseManager.execute_query(query, (user_id,), fetch_all=True)
             
@@ -3373,7 +3373,7 @@ class DatabaseManager:
                 'mention_id': row[0],
                 'message_id': row[1],
                 'sender_id': row[2],
-                'created_at': row[3].strftime('%H:%M %d/%m/%Y') if row[3] else '',
+                'createdat': row[3].strftime('%H:%M %d/%m/%Y') if row[3] else '',
                 'is_read': row[4],
                 'message_content': row[5],
                 'room_id': row[6],
@@ -3565,6 +3565,7 @@ class DatabaseManager:
             if exists:
                 # SỬA: Cập nhật cột role_name, truyền đúng thứ tự: role, room_id, user_id
                 update_query = "UPDATE room_roles SET role_name = ? WHERE room_id = ? AND user_id = ?"
+# Thứ tự tham số chuẩn: dấu ? số 1 là role, số 2 là room_id, số 3 là user_id
                 DatabaseManager.execute_query(update_query, (role, room_id, user_id))
             else:
                 # SỬA: Chèn mới vào bảng với các cột rõ ràng: room_id, user_id, role_name
