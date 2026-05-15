@@ -580,8 +580,7 @@ class DatabaseManager:
     def get_group_rooms(user_id):
         """Lấy danh sách nhóm (Sử dụng LATERAL cho PostgreSQL)"""
         try:
-            # Sử dụng LEFT JOIN LATERAL thay cho OUTER APPLY
-            # Sử dụng LIMIT 1 thay cho TOP 1
+            # SỬA LỖI: r.isgroup = TRUE thay vì 1
             query = """
                 SELECT r.roomid,
                        r.roomname,
@@ -604,10 +603,60 @@ class DatabaseManager:
                     WHERE isread = 0 AND senderid != ?
                     GROUP BY roomid
                 ) unread ON unread.roomid = r.roomid
-                WHERE r.isgroup = 1
+                WHERE r.isgroup = TRUE
                 ORDER BY last_msg.sentat DESC NULLS LAST
             """
+            # DatabaseManager.execute_query sẽ tự xử lý dấu '?' sang '%s' cho Postgres
             rows = DatabaseManager.execute_query(query, (user_id,), fetch_all=True)
+            
+            rooms = []
+            for row in rows:
+                # row[4] là lastsentat (TIMESTAMP)
+                last_sent = row[4].strftime('%H:%M') if row[4] and hasattr(row[4], 'strftime') else ''
+                rooms.append({
+                    'room_id': row[0],
+                    'room_name': row[1],
+                    'group_avatar': row[2],
+                    'last_message': row[3],
+                    'last_sent_at': last_sent,
+                    'unread_count': row[5]
+                })
+            return rooms
+        except Exception as e:
+            app_logger.error(f"Get group rooms error: {e}")
+            return []@staticmethod
+    def get_group_rooms(user_id):
+        """Lấy danh sách nhóm (Sử dụng LATERAL cho PostgreSQL)"""
+        try:
+            # SỬA LỖI: r.isgroup = TRUE thay vì 1
+            query = """
+                SELECT r.roomid,
+                       r.roomname,
+                       r.groupavatar,
+                       COALESCE(last_msg.content_display, 'Chưa có tin nhắn') AS lastmessage,
+                       last_msg.sentat AS lastsentat,
+                       COALESCE(unread.unreadcount, 0) AS unreadcount
+                FROM rooms r
+                LEFT JOIN LATERAL (
+                    SELECT CASE WHEN messagetype = 'Image' THEN '[Ảnh]' ELSE content END AS content_display,
+                           sentat
+                    FROM messages m
+                    WHERE m.roomid = r.roomid
+                    ORDER BY sentat DESC
+                    LIMIT 1
+                ) last_msg ON TRUE
+                LEFT JOIN (
+                    SELECT roomid, COUNT(*) AS unreadcount
+                    FROM messages
+                    WHERE isread = 0 AND senderid != ?
+                    GROUP BY roomid
+                ) unread ON unread.roomid = r.roomid
+                WHERE r.isgroup = TRUE
+                ORDER BY last_msg.sentat DESC NULLS LAST
+            """
+            # DatabaseManager.execute_query sẽ tự xử lý dấu '?' sang '%s' cho Postgres
+            rows = DatabaseManager.execute_query(query, (user_id,), fetch_all=True)
+            
             rooms = []
             for row in rows:
                 # row[4] là lastsentat (TIMESTAMP)
@@ -659,9 +708,7 @@ class DatabaseManager:
     def get_private_rooms(user_id):
         """Lấy danh sách phòng chat cá nhân (Tương thích Postgres)"""
         try:
-            # Thay OUTER APPLY bằng LEFT JOIN LATERAL
-            # Thay TOP 1 bằng LIMIT 1
-            # Viết thường tên bảng và cột
+            # Sửa lỗi: r.isgroup = FALSE thay vì 0
             query = """
                 SELECT r.roomid,
                        r.roomname,
@@ -688,12 +735,15 @@ class DatabaseManager:
                     WHERE isread = 0 AND senderid != ?
                     GROUP BY roomid
                 ) unread ON unread.roomid = r.roomid
-                WHERE r.isgroup = 0
+                WHERE r.isgroup = FALSE
                 ORDER BY last_msg.sentat DESC NULLS LAST
             """
+            # DatabaseManager.execute_query sẽ tự đổi '?' thành '%s' cho Postgres
             rows = DatabaseManager.execute_query(query, (user_id, user_id, user_id), fetch_all=True)
+            
             rooms = []
             for row in rows:
+                # row[5] là lastsentat (kiểu datetime)
                 last_sent = row[5].strftime('%H:%M') if row[5] and hasattr(row[5], 'strftime') else ''
                 rooms.append({
                     'room_id': row[0],
