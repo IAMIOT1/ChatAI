@@ -371,42 +371,33 @@ def private_room(target_user_id):
     return jsonify({'success': True, 'room_id': room_id, 'room_name': room_name})
 
 
-@app.route('/search')
-def search():
-    q = request.args.get('q', '').strip()
-    user_id = session.get('user_id')
-    if not q or not user_id:
+@app.route('/search_users', methods=['GET'])
+def search_users():
+    search_query = request.args.get('query', '')
+    current_user_id = session.get('user_id')
+
+    if not search_query:
         return jsonify([])
+
+    conn = DatabaseManager.get_db_connection() # Sử dụng Class của bạn
+    cursor = conn.cursor()
     
-    conn = DatabaseManager.get_db_connection()
-    cur = conn.cursor()
-    
-    # Truy vấn lấy thông tin user từ bảng users và trạng thái bạn bè
-    query = """
-        SELECT u.userid, u.fullname, u.username, f.status, f.sender_id
-        FROM users u
-        LEFT JOIN friendships f ON (
-            (f.sender_id = %s AND f.receiver_id = u.userid) OR 
-            (f.sender_id = u.userid AND f.receiver_id = %s)
-        )
-        WHERE u.username = %s AND u.userid != %s
-    """
-    cur.execute(query, (user_id, user_id, q, user_id))
-    rows = cur.fetchall()
-    
-    results = []
-    for row in rows:
-        results.append({
-            'userid': row[0],
-            'fullname': row[1],
-            'username': row[2],
-            'friend_status': row[3], # Trạng thái 'accepted', 'pending' hoặc None
-            'is_sender': (row[4] == user_id)
-        })
-    
-    cur.close()
-    conn.close()
-    return jsonify(results)
+    try:
+        # Tìm kiếm theo số điện thoại (cột phone)
+        # Sử dụng LIKE để người dùng có thể tìm 1 phần số điện thoại
+        query = "SELECT id, username, phone FROM users WHERE phone LIKE %s AND id != %s"
+        cursor.execute(query, (f"%{search_query}%", current_user_id))
+        
+        users = cursor.fetchall()
+        # Chuyển đổi kết quả sang dạng danh sách để JSON hóa
+        result = [{"id": u[0], "username": u[1], "phone": u[2]} for u in users]
+        return jsonify(result)
+    except Exception as e:
+        print(f"Lỗi tìm kiếm: {e}")
+        return jsonify({"error": str(e)}), 500
+    finally:
+        cursor.close()
+        conn.close()
 
 # Route gửi lời mời kết bạn
 @app.route('/add_friend', methods=['POST'])

@@ -4505,6 +4505,15 @@
             // 3. Hiển thị Modal (Đảm bảo ID profileModal đã có trong HTML)
             document.getElementById('profileModal').style.display = 'flex';
         }
+        function searchUser() {
+            let query = document.getElementById('search-input').value;
+            fetch(`/search_users?query=${query}`)
+                .then(response => response.json())
+                .then(data => {
+                    // Hiển thị kết quả ra màn hình ở đây
+                    console.log(data);
+                });
+        }
 
 
     </script>
