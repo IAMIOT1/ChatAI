@@ -1083,17 +1083,18 @@ class DatabaseManager:
     def register_user(username, fullname, phone, password, verification_token=None, is_verified=True):
         """Đăng ký tài khoản mới vào Postgres"""
         try:
-            # Mã hóa mật khẩu bảo mật trước khi lưu vào cột password_hash
             from werkzeug.security import generate_password_hash
             hashed_password = generate_password_hash(password)
             
-            # SỬA: Gọi đúng tên cột password_hash của bảng users
+            # Câu lệnh INSERT gọi các cột chuẩn của bảng users
             query = """
                 INSERT INTO users (username, fullname, phone, password_hash, isverified, status)
                 VALUES (?, ?, ?, ?, ?, 'Offline')
             """
-            # Ép kiểu boolean cho is_verified (Postgres yêu cầu khắt khe kiểu boolean)
-            verified_val = 1 if is_verified else 0
+            
+            # SỬA: Thay vì dùng 1 hoặc 0, ta truyền trực tiếp giá trị Boolean True/False của Python.
+            # Driver psycopg2/pg8000 sẽ tự động chuyển nó thành TRUE/FALSE hợp lệ trong Postgres.
+            verified_val = True if is_verified else False
             
             DatabaseManager.execute_query(query, (username, fullname, phone, hashed_password, verified_val))
             return True
