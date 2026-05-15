@@ -1951,8 +1951,8 @@
             <div class="section-title">Bạn bè</div>
             {% if friends %}
             {% for friend in friends %}
-            {% if friend.UserID not in private_user_ids %}
-            <div class="user-item" data-user-id="{{ friend.UserID }}" data-user-name="{{ friend.FullName }}"
+            {% if friend.id not in private_user_ids %}
+            <div class="user-item" data-user-id="{{ friend.id }}" data-user-name="{{ friend.FullName }}"
                 onclick="fetchPrivateRoomFromData(this)">
                 <i class="fas fa-user-circle"></i>
                 <span>{{ friend.FullName }} <span
@@ -2718,7 +2718,7 @@
             event.target.value = null;
         }
 
-        function selectUser(userId, userName) {
+        function selectUser(id, userName) {
             document.querySelector('.chat-header-title').innerText = 'Đang chat với: ' + userName;
             document.getElementById('messages').innerHTML = '';
             // Tạm thời chưa dùng trực tiếp nếu không gọi API private_room
@@ -2878,9 +2878,9 @@
 
         // Hàm xử lý fetch private room từ data attributes  
         function fetchPrivateRoomFromData(element) {
-            var userId = element.getAttribute('data-user-id');
+            var id = element.getAttribute('data-user-id');
             var userName = element.getAttribute('data-user-name');
-            fetchPrivateRoom(userId, userName);
+            fetchPrivateRoom(id, userName);
         }
 
         function selectRoom(roomId, roomName) {
@@ -2925,8 +2925,8 @@
             loadHistory(roomId);
         }
 
-        function fetchPrivateRoom(userId, userName) {
-            fetch('/private_room/' + userId, {
+        function fetchPrivateRoom(id, userName) {
+            fetch('/private_room/' + id, {
                 method: 'GET'
             })
                 .then(function (response) { return response.json(); })
@@ -2971,9 +2971,9 @@
             updateOnlineUsersList(users);
         });
 
-        function updateUserStatus(userId, status) {
+        function updateUserStatus(id, status) {
             // Cập nhật status trong friend list
-            var friendElements = document.querySelectorAll('[data-user-id="' + userId + '"]');
+            var friendElements = document.querySelectorAll('[data-user-id="' + id + '"]');
             friendElements.forEach(function (element) {
                 var statusDot = element.querySelector('.status-dot');
                 if (statusDot) {
@@ -2982,9 +2982,9 @@
             });
         }
 
-        function updateUserStatusDisplay(userId, userName, status) {
+        function updateUserStatusDisplay(id, userName, status) {
             // Hiển thị thông báo khi user online/offline
-            if (userId != getCurrentUserId()) {
+            if (id != getCurrentid()) {
                 var notify = document.getElementById('typing-notify');
                 if (notify) {
                     notify.innerText = userName + ' ' + (status === 'Online' ? 'đã online' : 'đã offline');
@@ -3000,7 +3000,7 @@
             console.log('Online users:', users);
         }
 
-        function getCurrentUserId() {
+        function getCurrentid() {
             // Lấy user ID hiện tại (có thể lưu trong session hoặc hidden input)
             return {{ session.get('user_id', 'null') | tojson }};
         }
@@ -3879,8 +3879,8 @@
             });
         }
 
-        function changeRole(userId, newRole) {
-            fetch('/assign_role/' + current_room + '/' + userId, {
+        function changeRole(id, newRole) {
+            fetch('/assign_role/' + current_room + '/' + id, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json'
@@ -3929,8 +3929,8 @@
             ]
         };
 
-        function startVideoCall(targetUserId) {
-            if (!targetUserId) {
+        function startVideoCall(targetid) {
+            if (!targetid) {
                 alert('Chưa có người nhận cuộc gọi. Vui lòng chọn bạn hoặc phòng để gọi.');
                 return;
             }
@@ -3968,7 +3968,7 @@
                         if (event.candidate) {
                             socket.emit('ice_candidate', {
                                 room: current_room,
-                                target_user: targetUserId,
+                                target_user: targetid,
                                 candidate: event.candidate
                             });
                         }
@@ -3982,7 +3982,7 @@
                             socket.emit('video_call_offer', {
                                 room: current_room,
                                 caller: current_user,
-                                callee: targetUserId,
+                                callee: targetid,
                                 offer: peerConnection.localDescription
                             });
                         })
@@ -4395,17 +4395,17 @@
                 
                 if (user.friend_status === 'accepted') {
                     // Đã là bạn -> Cho nhắn tin
-                    actionBtn = `<button onclick="startPrivateChat(${user.userid})">Nhắn tin</button>`;
+                    actionBtn = `<button onclick="startPrivateChat(${user.id})">Nhắn tin</button>`;
                 } else if (user.friend_status === 'pending') {
                     if (user.is_sender) {
                         actionBtn = `<button disabled>Đã gửi lời mời</button>`;
                     } else {
-                        actionBtn = `<button onclick="acceptFriend(${user.userid})">Chấp nhận kết bạn</button>`;
+                        actionBtn = `<button onclick="acceptFriend(${user.id})">Chấp nhận kết bạn</button>`;
                     }
                 } else {
                     // Chưa có quan hệ gì
-                    let chatBtn = user.is_public ? `<button onclick="startPrivateChat(${user.userid})">Nhắn tin (Người lạ)</button>` : '';
-                    let addBtn = `<button onclick="addFriend(${user.userid})">Kết bạn</button>`;
+                    let chatBtn = user.is_public ? `<button onclick="startPrivateChat(${user.id})">Nhắn tin (Người lạ)</button>` : '';
+                    let addBtn = `<button onclick="addFriend(${user.id})">Kết bạn</button>`;
                     actionBtn = addBtn + chatBtn;
                 }
 
@@ -4461,16 +4461,16 @@
 
             // Logic nút bấm dựa trên friend_status
             if (user.friend_status === 'accepted') {
-                actionsDiv.innerHTML = `<button class="btn-action chat" style="width:100%; background:#0084ff; color:white; border:none; padding:10px; border-radius:8px;" onclick="selectResult(${user.userid}, 'User', '${user.fullname}')">Nhắn tin ngay</button>`;
+                actionsDiv.innerHTML = `<button class="btn-action chat" style="width:100%; background:#0084ff; color:white; border:none; padding:10px; border-radius:8px;" onclick="selectResult(${user.id}, 'User', '${user.fullname}')">Nhắn tin ngay</button>`;
             } else if (user.friend_status === 'pending') {
                 if (user.is_sender) {
                     actionsDiv.innerHTML = `<button style="width:100%; background:#ccc; border:none; padding:10px; border-radius:8px;" disabled>Đã gửi lời mời</button>`;
                 } else {
-                    actionsDiv.innerHTML = `<button style="width:100%; background:#28a745; color:white; border:none; padding:10px; border-radius:8px;" onclick="acceptFriend(${user.userid})">Chấp nhận kết bạn</button>`;
+                    actionsDiv.innerHTML = `<button style="width:100%; background:#28a745; color:white; border:none; padding:10px; border-radius:8px;" onclick="acceptFriend(${user.id})">Chấp nhận kết bạn</button>`;
                 }
             } else {
                 // Chưa là bạn
-                actionsDiv.innerHTML = `<button style="width:100%; background:#0084ff; color:white; border:none; padding:10px; border-radius:8px;" onclick="addFriend(${user.userid})">Kết bạn</button>`;
+                actionsDiv.innerHTML = `<button style="width:100%; background:#0084ff; color:white; border:none; padding:10px; border-radius:8px;" onclick="addFriend(${user.id})">Kết bạn</button>`;
             }
             
             document.getElementById('profileModal').style.display = 'block';
@@ -4489,16 +4489,16 @@
 
             // 2. Kiểm tra trạng thái để hiện nút
             if (user.friend_status === 'accepted') {
-                actionsDiv.innerHTML = `<button onclick="startPrivateChat(${user.userid})" class="btn-action chat" style="width:100%; background:#0084ff; color:white; padding:10px; border:none; border-radius:8px;">Nhắn tin</button>`;
+                actionsDiv.innerHTML = `<button onclick="startPrivateChat(${user.id})" class="btn-action chat" style="width:100%; background:#0084ff; color:white; padding:10px; border:none; border-radius:8px;">Nhắn tin</button>`;
             } else if (user.friend_status === 'pending') {
                 if (user.is_sender) {
                     actionsDiv.innerHTML = `<button style="width:100%; background:#ccc; padding:10px; border:none; border-radius:8px;" disabled>Đã gửi lời mời</button>`;
                 } else {
-                    actionsDiv.innerHTML = `<button onclick="acceptFriend(${user.userid})" style="width:100%; background:#28a745; color:white; padding:10px; border:none; border-radius:8px;">Chấp nhận kết bạn</button>`;
+                    actionsDiv.innerHTML = `<button onclick="acceptFriend(${user.id})" style="width:100%; background:#28a745; color:white; padding:10px; border:none; border-radius:8px;">Chấp nhận kết bạn</button>`;
                 }
             } else {
                 // LUỒNG TỚI CẦN: Chưa là bạn thì hiện nút Kết bạn ở đây
-                actionsDiv.innerHTML = `<button onclick="addFriend(${user.userid})" style="width:100%; background:#0084ff; color:white; padding:10px; border:none; border-radius:8px; font-weight:bold;">Kết bạn</button>`;
+                actionsDiv.innerHTML = `<button onclick="addFriend(${user.id})" style="width:100%; background:#0084ff; color:white; padding:10px; border:none; border-radius:8px; font-weight:bold;">Kết bạn</button>`;
             }
 
             // 3. Hiển thị Modal (Đảm bảo ID profileModal đã có trong HTML)

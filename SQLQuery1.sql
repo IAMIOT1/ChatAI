@@ -1,6 +1,6 @@
 -- 1. BẢNG NGƯỜI DÙNG (Giữ nguyên của Tới)
 CREATE TABLE IF NOT EXISTS users (
-    userid SERIAL PRIMARY KEY,
+    id SERIAL PRIMARY KEY,
     username VARCHAR(50) UNIQUE NOT NULL, -- Đây là nơi lưu SĐT
     fullname VARCHAR(100),
     password VARCHAR(255),
@@ -22,8 +22,8 @@ CREATE TABLE IF NOT EXISTS rooms (
 -- 3. BẢNG KẾT BẠN (QUAN TRỌNG NHẤT CHO LOGIC MỚI)
 CREATE TABLE IF NOT EXISTS friendships (
     request_id SERIAL PRIMARY KEY,
-    sender_id INTEGER REFERENCES users(userid) ON DELETE CASCADE,
-    receiver_id INTEGER REFERENCES users(userid) ON DELETE CASCADE,
+    sender_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+    receiver_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
     status VARCHAR(20) DEFAULT 'pending', -- 'pending' (chờ), 'accepted' (đã là bạn)
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(sender_id, receiver_id)
@@ -32,18 +32,18 @@ CREATE TABLE IF NOT EXISTS friendships (
 -- 4. BẢNG THÀNH VIÊN PHÒNG (Giữ nguyên)
 CREATE TABLE IF NOT EXISTS roomparticipants (
     roomid INT NOT NULL,
-    userid INT NOT NULL,
+    id INT NOT NULL,
     joinedat TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY (roomid, userid),
+    PRIMARY KEY (roomid, id),
     CONSTRAINT fk_room FOREIGN KEY (roomid) REFERENCES rooms(roomid) ON DELETE CASCADE,
-    CONSTRAINT fk_user FOREIGN KEY (userid) REFERENCES users(userid) ON DELETE CASCADE
+    CONSTRAINT fk_user FOREIGN KEY (id) REFERENCES users(id) ON DELETE CASCADE
 );
 
 -- 5. BẢNG TIN NHẮN (Giữ nguyên)
 CREATE TABLE IF NOT EXISTS messages (
     messageid SERIAL PRIMARY KEY,
     roomid INT REFERENCES rooms(roomid) ON DELETE CASCADE,
-    senderid INT REFERENCES users(userid) ON DELETE CASCADE,
+    senderid INT REFERENCES users(id) ON DELETE CASCADE,
     content TEXT,
     sentat TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     messagetype VARCHAR(20) DEFAULT 'Text',

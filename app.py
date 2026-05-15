@@ -287,7 +287,7 @@ def index():
 
         unread_counts = get_unread_counts(user_id)
         database.DatabaseManager.ensure_phone_column()
-        query = "SELECT UserID, FullName, Status, Phone FROM Users WHERE UserID != ?"
+        query = "SELECT id, FullName, Status, Phone FROM Users WHERE id != ?"
         friends = database.DatabaseManager.execute_query(query, (user_id,), fetch_all=True)
         
         default_room_id = group_rooms[0]['room_id'] if group_rooms else (private_rooms[0]['room_id'] if private_rooms else 1)
@@ -669,8 +669,8 @@ def login():
 
             if user:
                 # Handle both tuple and Row object
-                if hasattr(user, 'UserID'):  # Row object
-                    user_id = user.UserID
+                if hasattr(user, 'id'):  # Row object
+                    user_id = user.id
                     full_name = user.FullName
                     password_hash = user.Password
                 else:  # Tuple
@@ -848,7 +848,7 @@ def facebook_authorized():
                     app_logger.info(f"Created new user with Facebook OAuth: {email}")
 
         if user:
-            session['user_id'] = int(get_user_attr(user, 'UserID', 0))
+            session['user_id'] = int(get_user_attr(user, 'id', 0))
             session['user_name'] = get_user_attr(user, 'FullName', 1)
             update_status(session['user_id'], 'Online')
             flash(f'Chào mừng {get_user_attr(user, "FullName", 1)} đã đăng nhập bằng Facebook!')
@@ -897,7 +897,7 @@ def google_authorized():
                     app_logger.info(f"Created new user with Google OAuth: {email}")
 
         if user:
-            session['user_id'] = int(get_user_attr(user, 'UserID', 0))
+            session['user_id'] = int(get_user_attr(user, 'id', 0))
             session['user_name'] = get_user_attr(user, 'FullName', 1)
             update_status(session['user_id'], 'Online')
             flash(f'Chào mừng {get_user_attr(user, "FullName", 1)} đã đăng nhập bằng Google!')
@@ -1346,7 +1346,7 @@ def handle_forward_message(data):
             query = """
                 SELECT Content, MessageType, u.FullName as OriginalSender
                 FROM Messages m
-                JOIN Users u ON m.SenderID = u.UserID
+                JOIN Users u ON m.SenderID = u.id
                 WHERE m.MessageID = ?
             """
             original = database.DatabaseManager.execute_query(query, (message_id,), fetch_one=True)
@@ -1465,9 +1465,9 @@ def get_room_users(room_id):
     """Get users in a room for mention suggestions"""
     try:
         query = """
-            SELECT DISTINCT u.UserID, u.Username, u.FullName
+            SELECT DISTINCT u.id, u.Username, u.FullName
             FROM Users u
-            JOIN RoomParticipants rp ON u.UserID = rp.UserID
+            JOIN RoomParticipants rp ON u.id = rp.id
             WHERE rp.RoomID = ? AND u.Status = 'Online'
         """
         users = database.DatabaseManager.execute_query(query, (room_id,), fetch_all=True)
@@ -2960,7 +2960,7 @@ def analytics_export():
         if data:
             # Write headers based on export type
             if export_type == 'users':
-                writer.writerow(['UserID', 'FullName', 'Username', 'Email', 'Status', 'CreatedAt'])
+                writer.writerow(['id', 'FullName', 'Username', 'Email', 'Status', 'CreatedAt'])
             elif export_type == 'messages':
                 writer.writerow(['MessageID', 'Content', 'MessageType', 'SentAt', 'SenderName'])
             elif export_type == 'rooms':
