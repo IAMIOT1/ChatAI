@@ -517,14 +517,14 @@ class DatabaseManager:
     def get_unread_counts(user_id):
         """Đếm số tin nhắn chưa đọc trong các phòng chat của người dùng"""
         try:
-            # SỬA: Đổi 'senderid' thành 'sender_id' có dấu gạch dưới
+            # SỬA: Đổi 'senderid' viết liền thành 'sender_id' có dấu gạch dưới
             query = """
                 SELECT room_id, COUNT(*) 
                 FROM messages 
                 WHERE isread = 0 AND sender_id != %s 
                 GROUP BY room_id
             """
-            # Đảm bảo truyền tham số dưới dạng tuple hợp lệ cho Postgres
+            # Thực thi câu lệnh với tuple tham số chuẩn cho Postgres
             results = DatabaseManager.execute_query(query, (int(user_id),), fetch_all=True)
             return {row[0]: row[1] for row in results}
         except Exception as e:
