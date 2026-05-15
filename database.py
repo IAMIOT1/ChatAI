@@ -1093,7 +1093,7 @@ class DatabaseManager:
             # SỬA LỖI: Đồng bộ tên cột (dùng gạch dưới)
             # SỬA LỖI: Postgres dùng TRUE/FALSE trực tiếp cho kiểu BOOLEAN
             query = """
-                INSERT INTO users (username, fullname, phone, password, status, is_verified, verification_token, created_at)
+                INSERT INTO users (username, fullname, phone, password_hash, status, is_verified, verification_token, created_at)
                 VALUES (?, ?, ?, ?, 'Offline', ?, ?, CURRENT_TIMESTAMP)
             """
             
