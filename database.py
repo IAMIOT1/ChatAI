@@ -583,7 +583,7 @@ class DatabaseManager:
             # SỬA LỖI: r.isgroup = TRUE thay vì 1
             query = """
                 SELECT r.roomid,
-                       r.roomname,
+                       r.room_name,
                        r.groupavatar,
                        COALESCE(last_msg.content_display, 'Chưa có tin nhắn') AS lastmessage,
                        last_msg.sentat AS lastsentat,
@@ -631,7 +631,7 @@ class DatabaseManager:
             # SỬA LỖI: r.isgroup = TRUE thay vì 1
             query = """
                 SELECT r.roomid,
-                       r.roomname,
+                       r.room_name,
                        r.groupavatar,
                        COALESCE(last_msg.content_display, 'Chưa có tin nhắn') AS lastmessage,
                        last_msg.sentat AS lastsentat,
@@ -711,7 +711,7 @@ class DatabaseManager:
             # Sửa lỗi: r.isgroup = FALSE thay vì 0
             query = """
                 SELECT r.roomid,
-                       r.roomname,
+                       r.room_name,
                        u.id AS otherid,
                        u.fullname AS otherusername,
                        COALESCE(last_msg.content_display, 'Chưa có tin nhắn') AS lastmessage,
@@ -1208,12 +1208,12 @@ class DatabaseManager:
         try:
             # 1. Top 10 phòng chat tích cực
             query = """
-                SELECT r.roomname, COUNT(m.messageid) as messagecount,
+                SELECT r.room_name, COUNT(m.messageid) as messagecount,
                        COUNT(DISTINCT m.senderid) as activeusers
                 FROM rooms r
                 LEFT JOIN messages m ON r.roomid = m.roomid
                 WHERE m.sentat >= CURRENT_DATE - (? || ' days')::interval
-                GROUP BY r.roomid, r.roomname
+                GROUP BY r.roomid, r.room_name
                 ORDER BY messagecount DESC
                 LIMIT 10
             """
@@ -1874,7 +1874,7 @@ class DatabaseManager:
             # Chuyển tên bảng/cột về chữ thường
             query = """
                 SELECT gi.inviteid, gi.roomid, gi.inviterid, gi.createdat,
-                       r.roomname, r.avatarurl, u.fullname as invitername
+                       r.room_name, r.avatarurl, u.fullname as invitername
                 FROM groupinvites gi
                 JOIN rooms r ON gi.roomid = r.roomid
                 JOIN users u ON gi.inviterid = u.id
@@ -2059,14 +2059,14 @@ class DatabaseManager:
             # Sử dụng ILIKE để tìm kiếm tiếng Việt có dấu/không dấu linh hoạt hơn
             search_query = """
                 SELECT DISTINCT m.messageid, m.senderid, u.fullname as sendername, m.content,
-                       m.messagetype, m.sentat, m.roomid, r.roomname,
-                       CASE WHEN r.isgroup IS TRUE THEN r.roomname ELSE 'Chat riêng' END as roomdisplayname
+                       m.messagetype, m.sentat, m.roomid, r.room_name,
+                       CASE WHEN r.isgroup IS TRUE THEN r.room_name ELSE 'Chat riêng' END as roomdisplayname
                 FROM messages m
                 JOIN users u ON m.senderid = u.id
                 JOIN rooms r ON m.roomid = r.roomid
                 JOIN roomparticipants rp ON r.roomid = rp.roomid AND rp.id = ?
                 WHERE (m.isdeleted IS FALSE OR m.isdeleted IS NULL)
-                  AND (m.content ILIKE ? OR u.fullname ILIKE ? OR r.roomname ILIKE ?)
+                  AND (m.content ILIKE ? OR u.fullname ILIKE ? OR r.room_name ILIKE ?)
                 ORDER BY m.sentat DESC
                 LIMIT ? OFFSET ?
             """
@@ -2084,7 +2084,7 @@ class DatabaseManager:
                 JOIN rooms r ON m.roomid = r.roomid
                 JOIN roomparticipants rp ON r.roomid = rp.roomid AND rp.id = ?
                 WHERE (m.isdeleted IS FALSE OR m.isdeleted IS NULL)
-                  AND (m.content ILIKE ? OR u.fullname ILIKE ? OR r.roomname ILIKE ?)
+                  AND (m.content ILIKE ? OR u.fullname ILIKE ? OR r.room_name ILIKE ?)
             """
             total_result = DatabaseManager.execute_query(
                 count_query, 
@@ -2124,10 +2124,10 @@ class DatabaseManager:
                 FROM users u
                 WHERE u.id != ? AND (u.fullname ILIKE ? OR u.username ILIKE ?)
                 UNION ALL
-                SELECT DISTINCT 'room' as type, r.roomname as name, '' as username
+                SELECT DISTINCT 'room' as type, r.room_name as name, '' as username
                 FROM rooms r
                 JOIN roomparticipants rp ON r.roomid = rp.roomid AND rp.id = ?
-                WHERE r.roomname ILIKE ?
+                WHERE r.room_name ILIKE ?
                 ORDER BY name
                 LIMIT 10
             """
@@ -2337,14 +2337,14 @@ class DatabaseManager:
             # Logic xử lý: Chỉ tìm trong các phòng mà user_id là thành viên (RoomParticipants)
             search_query = """
                 SELECT DISTINCT m.messageid, m.senderid, u.fullname as sendername, m.content,
-                       m.messagetype, m.sentat, m.roomid, r.roomname,
-                       CASE WHEN r.isgroup IS TRUE THEN r.roomname ELSE 'Chat riêng' END as roomdisplayname
+                       m.messagetype, m.sentat, m.roomid, r.room_name,
+                       CASE WHEN r.isgroup IS TRUE THEN r.room_name ELSE 'Chat riêng' END as roomdisplayname
                 FROM messages m
                 JOIN users u ON m.senderid = u.id
                 JOIN rooms r ON m.roomid = r.roomid
                 JOIN roomparticipants rp ON r.roomid = rp.roomid AND rp.id = ?
                 WHERE (m.isdeleted IS FALSE OR m.isdeleted IS NULL)
-                  AND (m.content ILIKE ? OR u.fullname ILIKE ? OR r.roomname ILIKE ?)
+                  AND (m.content ILIKE ? OR u.fullname ILIKE ? OR r.room_name ILIKE ?)
                 ORDER BY m.sentat DESC
                 LIMIT ? OFFSET ?
             """
@@ -2362,7 +2362,7 @@ class DatabaseManager:
                 JOIN rooms r ON m.roomid = r.roomid
                 JOIN roomparticipants rp ON r.roomid = rp.roomid AND rp.id = ?
                 WHERE (m.isdeleted IS FALSE OR m.isdeleted IS NULL)
-                  AND (m.content ILIKE ? OR u.fullname ILIKE ? OR r.roomname ILIKE ?)
+                  AND (m.content ILIKE ? OR u.fullname ILIKE ? OR r.room_name ILIKE ?)
             """
             total_result = DatabaseManager.execute_query(
                 count_query, 
@@ -2402,10 +2402,10 @@ class DatabaseManager:
                 FROM users u
                 WHERE u.id != ? AND (u.fullname ILIKE ? OR u.username ILIKE ?)
                 UNION ALL
-                SELECT DISTINCT 'room' as type, r.roomname as name, '' as username
+                SELECT DISTINCT 'room' as type, r.room_name as name, '' as username
                 FROM rooms r
                 JOIN roomparticipants rp ON r.roomid = rp.roomid AND rp.id = ?
-                WHERE r.roomname ILIKE ?
+                WHERE r.room_name ILIKE ?
                 ORDER BY name
                 LIMIT 10
             """
@@ -2532,11 +2532,11 @@ class DatabaseManager:
             
             # Top 10 phòng chat sôi nổi nhất (30 ngày qua)
             top_rooms_query = """
-                SELECT r.roomname, COUNT(m.messageid) as MessageCount
+                SELECT r.room_name, COUNT(m.messageid) as MessageCount
                 FROM rooms r
                 LEFT JOIN messages m ON r.roomid = m.roomid
                 WHERE m.sentat >= CURRENT_DATE - INTERVAL '30 days'
-                GROUP BY r.roomid, r.roomname
+                GROUP BY r.roomid, r.room_name
                 ORDER BY MessageCount DESC
                 LIMIT 10
             """
