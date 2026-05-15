@@ -2779,28 +2779,33 @@
                 resDiv.style.display = 'none';
                 return;
             }
+
             fetch('/search?q=' + encodeURIComponent(q))
-                .then(function (response) { return response.json(); })
-                .then(function (data) {
+                .then(response => response.json())
+                .then(data => {
                     resDiv.innerHTML = '';
                     if (data.length > 0) {
                         resDiv.style.display = 'block';
-                        data.forEach(function (item) {
-                            // Chỗ này cực quan trọng: onclick sẽ mở Modal Profile
-                            resDiv.innerHTML += `
-                                <div class='user-item' onclick='openProfileModal(${JSON.stringify(item)})' 
-                                    style='padding:12px; border-bottom:1px solid #eee; cursor:pointer; display:flex; align-items:center; transition: 0.2s;'>
-                                    <div style="width:40px; height:40px; background:#e1e4e8; border-radius:50%; display:flex; align-items:center; justify-content:center; margin-right:12px;">
-                                        <i class='fas fa-user' style="color:#555"></i>
-                                    </div>
-                                    <div style="text-align:left;">
-                                        <b style="font-size:14px; color:#333;">${item.fullname}</b><br>
-                                        <small style="color:#888;">SĐT: ${item.username}</small>
-                                    </div>
-                                </div>`;
+                        data.forEach(item => {
+                            // Tạo một phần tử div mới để tránh lỗi chuỗi JSON phức tạp
+                            const div = document.createElement('div');
+                            div.className = 'user-item';
+                            div.style = 'padding:12px; border-bottom:1px solid #eee; cursor:pointer; display:flex; align-items:center;';
+                            div.innerHTML = `
+                                <div style="width:40px; height:40px; background:#0084ff; border-radius:50%; display:flex; align-items:center; justify-content:center; margin-right:12px; color:white;">
+                                    <i class='fas fa-user'></i>
+                                </div>
+                                <div>
+                                    <b style="font-size:14px;">${item.fullname}</b><br>
+                                    <small style="color:#888;">${item.username}</small>
+                                </div>
+                            `;
+                            // Khi click vào thì mới mở Profile
+                            div.onclick = () => openProfileModal(item);
+                            resDiv.appendChild(div);
                         });
                     } else {
-                        resDiv.innerHTML = "<div style='padding:10px; color:#999;'>Không tìm thấy người dùng</div>";
+                        resDiv.innerHTML = "<div style='padding:10px; color:#999; text-align:center;'>Không tìm thấy người dùng</div>";
                         resDiv.style.display = 'block';
                     }
                 });
@@ -4470,21 +4475,28 @@
             document.getElementById('profileModal').style.display = 'none';
         }
         function openProfileModal(user) {
-            // Gán dữ liệu "truy cập từ user" vào giao diện Modal
+            // 1. Gán thông tin vào Modal
             document.getElementById('p-fullname').innerText = user.fullname;
-            document.getElementById('p-username').innerText = "Số điện thoại: " + user.username;
+            document.getElementById('p-username').innerText = "SĐT: " + user.username;
             
-            let actionsHtml = '';
+            const actionsDiv = document.getElementById('p-actions');
+            actionsDiv.innerHTML = ''; // Xóa nút cũ
+
+            // 2. Kiểm tra trạng thái để hiện nút
             if (user.friend_status === 'accepted') {
-                actionsHtml = `<button class="btn-chat" onclick="startChat(${user.userid})">Nhắn tin</button>`;
+                actionsDiv.innerHTML = `<button onclick="startPrivateChat(${user.userid})" class="btn-action chat" style="width:100%; background:#0084ff; color:white; padding:10px; border:none; border-radius:8px;">Nhắn tin</button>`;
             } else if (user.friend_status === 'pending') {
-                actionsHtml = user.is_sender ? `<span>Đã gửi lời mời</span>` : `<button onclick="acceptFriend(${user.userid})">Chấp nhận kết bạn</button>`;
+                if (user.is_sender) {
+                    actionsDiv.innerHTML = `<button style="width:100%; background:#ccc; padding:10px; border:none; border-radius:8px;" disabled>Đã gửi lời mời</button>`;
+                } else {
+                    actionsDiv.innerHTML = `<button onclick="acceptFriend(${user.userid})" style="width:100%; background:#28a745; color:white; padding:10px; border:none; border-radius:8px;">Chấp nhận kết bạn</button>`;
+                }
             } else {
-                // Chưa là bạn bè thì mới hiện nút Kết bạn
-                actionsHtml = `<button onclick="addFriend(${user.userid})" class="btn-add">Kết bạn</button>`;
+                // LUỒNG TỚI CẦN: Chưa là bạn thì hiện nút Kết bạn ở đây
+                actionsDiv.innerHTML = `<button onclick="addFriend(${user.userid})" style="width:100%; background:#0084ff; color:white; padding:10px; border:none; border-radius:8px; font-weight:bold;">Kết bạn</button>`;
             }
-            
-            document.getElementById('p-actions').innerHTML = actionsHtml;
+
+            // 3. Hiển thị Modal (Đảm bảo ID profileModal đã có trong HTML)
             document.getElementById('profileModal').style.display = 'flex';
         }
 
