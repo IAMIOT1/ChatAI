@@ -1867,9 +1867,9 @@
 
             <div class="section-title">
                 Nhóm của tôi 
-                {# Chỉ hiện nút cộng nếu có từ 2 bạn bè trở lên #}
-                {% if private_rooms and private_rooms|length >= 2 %}
-                    <i class="fas fa-plus-circle" onclick="showCreateGroup()"></i>
+                {# Sử dụng biến friend_count đã được đếm từ bảng friendships ở app.py #}
+                {% if friend_count and friend_count >= 2 %}
+                    <i class="fas fa-plus-circle" style="cursor:pointer" onclick="showCreateGroup()"></i>
                 {% endif %}
             </div>
 
