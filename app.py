@@ -251,18 +251,30 @@ def index():
     profile = {'full_name': '', 'username': '', 'avatar_url': ''}
     unread_counts = {}
     default_room_id = 1
+    friend_count = 0  # <--- Khởi tạo biến đếm bạn bè bằng 0
+
     try:
-        group_rooms = get_group_rooms(session['user_id'])
-        private_rooms = get_private_rooms(session['user_id'])
-        # Deduplicate private_rooms by other_user_id to avoid duplicate recipients
+        user_id = session['user_id']
+        group_rooms = get_group_rooms(user_id)
+        private_rooms = get_private_rooms(user_id)
+        
+        # Logic đếm bạn bè (Những người đã status = 'accepted')
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT COUNT(*) FROM friendships 
+            WHERE (sender_id = %s OR receiver_id = %s) AND status = 'accepted'
+        """, (user_id, user_id))
+        friend_count = cur.fetchone()[0]
+        cur.close()
+        conn.close()
+
+        # ... (giữ nguyên đoạn xử lý unique_private và unread_counts của bạn) ...
         try:
             unique_private = []
             seen_other = set()
             for pr in private_rooms:
-                other_id = None
-                if isinstance(pr, dict):
-                    other_id = pr.get('other_user_id')
-                # fallback to display_name if other_user_id missing
+                other_id = pr.get('other_user_id') if isinstance(pr, dict) else None
                 if other_id is None and isinstance(pr, dict):
                     other_id = pr.get('display_name')
                 if other_id not in seen_other:
@@ -270,28 +282,36 @@ def index():
                     unique_private.append(pr)
             private_rooms = unique_private
         except Exception:
-            # if anything goes wrong, keep original list
             pass
-        unread_counts = get_unread_counts(session['user_id'])
-        
-        # Lấy danh sách bạn bè (loại trừ bản thân)
+
+        unread_counts = get_unread_counts(user_id)
         database.DatabaseManager.ensure_phone_column()
         query = "SELECT UserID, FullName, Status, Phone FROM Users WHERE UserID != ?"
-        friends = database.DatabaseManager.execute_query(query, (session['user_id'],), fetch_all=True)
+        friends = database.DatabaseManager.execute_query(query, (user_id,), fetch_all=True)
         
         default_room_id = group_rooms[0]['room_id'] if group_rooms else (private_rooms[0]['room_id'] if private_rooms else 1)
-        
-        # Lấy lịch sử chat cho phòng đang được chọn
         history = database.DatabaseManager.get_room_messages(default_room_id)
         
-        profile = get_user_profile(session['user_id'])
-        profile['is_admin'] = is_admin(session['user_id'])
+        profile = get_user_profile(user_id)
+        profile['is_admin'] = is_admin(user_id)
+
     except Exception as e:
         print(f"Lỗi tải trang chủ: {e}")
         group_rooms, private_rooms, friends = [], [], []
-    user_rooms = [r['room_id'] for r in group_rooms] + [r['room_id'] for r in private_rooms]
-    return render_template('index.html', rooms=group_rooms, friends=friends, history=history, profile=profile, selected_room_id=default_room_id, unread_counts=unread_counts, private_rooms=private_rooms, user_rooms=user_rooms)
 
+    user_rooms = [r['room_id'] for r in group_rooms] + [r['room_id'] for r in private_rooms]
+    
+    # TRUYỀN friend_count SANG HTML
+    return render_template('index.html', 
+                           rooms=group_rooms, 
+                           friends=friends, 
+                           history=history, 
+                           profile=profile, 
+                           selected_room_id=default_room_id, 
+                           unread_counts=unread_counts, 
+                           private_rooms=private_rooms, 
+                           user_rooms=user_rooms,
+                           friend_count=friend_count) # <--- Thêm cái này
 
 @app.route('/create_group', methods=['POST'])
 def create_group():
@@ -356,12 +376,66 @@ def search():
     if not q:
         return jsonify([])
     try:
-        results = database.DatabaseManager.search(q, session['user_id'])
+        user_id = session.get('user_id')
+        conn = get_db_connection()
+        cur = conn.cursor()
+
+        # 1. Tìm chính xác theo số điện thoại (username)
+        # Đồng thời kiểm tra trạng thái kết bạn trong bảng friendships
+        query = """
+            SELECT u.userid, u.fullname, u.username, u.is_public, f.status, f.sender_id
+            FROM users u
+            LEFT JOIN friendships f ON (
+                (f.sender_id = %s AND f.receiver_id = u.userid) OR 
+                (f.sender_id = u.userid AND f.receiver_id = %s)
+            )
+            WHERE u.username = %s AND u.userid != %s
+        """
+        cur.execute(query, (user_id, user_id, q, user_id))
+        rows = cur.fetchall()
+        
+        results = []
+        for row in rows:
+            results.append({
+                'userid': row[0],
+                'fullname': row[1],
+                'username': row[2],
+                'is_public': row[3], # Chế độ công khai
+                'friend_status': row[4], # 'pending', 'accepted' hoặc None
+                'is_sender': (row[5] == user_id) # Để biết mình là người gửi hay người nhận
+            })
+            
+        cur.close()
+        conn.close()
         return jsonify(results)
     except Exception as e:
-        print(f"Lỗi tìm kiếm: {e}")
+        app_logger.error(f"Lỗi tìm kiếm: {e}")
         return jsonify([])
 
+@app.route('/send_friend_request', methods=['POST'])
+def send_friend_request():
+    if 'user_id' not in session:
+        return jsonify({'success': False, 'message': 'Chưa đăng nhập'})
+    
+    data = request.get_json()
+    receiver_id = data.get('target_id')
+    sender_id = session['user_id']
+
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        # Thêm lời mời mới
+        cur.execute("""
+            INSERT INTO friendships (sender_id, receiver_id, status)
+            VALUES (%s, %s, 'pending')
+            ON CONFLICT DO NOTHING
+        """, (sender_id, receiver_id))
+        conn.commit()
+        cur.close()
+        conn.close()
+        return jsonify({'success': True, 'message': 'Đã gửi lời mời kết bạn'})
+    except Exception as e:
+        return jsonify({'success': False, 'message': str(e)})
 
 @app.route('/history/<int:room_id>')
 def history(room_id):
@@ -2886,6 +2960,13 @@ def analytics_export():
 @app.route('/google4e20d9f91e4489f6.html')
 def google_verification():
     return send_from_directory('.', 'google4e20d9f91e4489f6.html')
+
+@app.route('/robots.txt')
+def static_from_root():
+    return send_from_directory(app.static_folder, request.path[1:])
+
+
+    
 if __name__ == "__main__":
 
     database.DatabaseManager.init_db_from_file()
