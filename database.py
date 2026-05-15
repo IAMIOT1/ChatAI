@@ -3159,7 +3159,7 @@ class DatabaseManager:
                         mutedat TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                         FOREIGN KEY (id) REFERENCES users(id),
                         FOREIGN KEY (id) REFERENCES rooms(id),
-                        UNIQUE(id, id)
+
                     )
                 """
                 DatabaseManager.execute_query(query)
@@ -3237,7 +3237,7 @@ class DatabaseManager:
                         assignedat TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                         FOREIGN KEY (id) REFERENCES rooms(id),
                         FOREIGN KEY (id) REFERENCES users(id),
-                        UNIQUE(id, id)
+
                     )
                 """
                 DatabaseManager.execute_query(query)
