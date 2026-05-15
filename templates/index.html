@@ -1702,6 +1702,20 @@
                 height: 32px !important;
             }
         }
+        .btn-action {
+            padding: 6px 14px;
+            border-radius: 18px;
+            border: none;
+            cursor: pointer;
+            font-size: 13px;
+            font-weight: 500;
+            transition: 0.3s;
+        }
+        .btn-action.add { background-color: #0084ff; color: white; }
+        .btn-action.add:hover { background-color: #0073de; }
+        .btn-action.chat { background-color: #e4e6eb; color: #050505; margin-left: 5px; }
+        .btn-action.accept { background-color: #28a745; color: white; }
+        .status-pending { font-size: 12px; color: #65676b; font-style: italic; }
     </style>
 </head>
 
@@ -2730,10 +2744,12 @@
         function liveSearch() {
             var q = document.getElementById('search-input').value;
             var resDiv = document.getElementById('search-results');
+            
             if (q.length < 1) {
                 resDiv.style.display = 'none';
                 return;
             }
+
             fetch('/search?q=' + encodeURIComponent(q))
                 .then(function (response) { return response.json(); })
                 .then(function (data) {
@@ -2742,12 +2758,50 @@
                         resDiv.style.display = 'block';
                         data.forEach(function (item) {
                             var icon = item.type === 'Group' ? 'fa-users' : 'fa-user';
-                            resDiv.innerHTML += "<div class='user-item' style='border:none; padding:10px;' onclick='selectResult(" + item.id + ", \"" + item.type + "\", \"" + item.name.replace(/'/g, "\\'") + "\")'>" +
-                                "<i class='fas " + icon + "'></i> " + item.name +
-                                "</div>";
+                            var actionBtn = "";
+
+                            // Nếu là Nhóm (Group)
+                            if (item.type === 'Group') {
+                                actionBtn = "<button class='btn-action chat' onclick='selectResult(" + item.id + ", \"Group\", \"" + item.name.replace(/'/g, "\\'") + "\")'>Vào nhóm</button>";
+                            } 
+                            // Nếu là Người dùng (User) - Logic kết bạn của Tới
+                            else {
+                                if (item.friend_status === 'accepted') {
+                                    // Đã là bạn bè
+                                    actionBtn = "<button class='btn-action chat' onclick='selectResult(" + item.userid + ", \"User\", \"" + item.fullname.replace(/'/g, "\\'") + "\")'>Nhắn tin</button>";
+                                } else if (item.friend_status === 'pending') {
+                                    if (item.is_sender) {
+                                        // Mình đã gửi lời mời
+                                        actionBtn = "<span class='status-pending'>Đang chờ...</span>";
+                                    } else {
+                                        // Họ gửi cho mình
+                                        actionBtn = "<button class='btn-action accept' onclick='acceptFriend(" + item.userid + ")'>Chấp nhận</button>";
+                                    }
+                                } else {
+                                    // Người lạ: Hiện nút Kết bạn
+                                    actionBtn = "<button class='btn-action add' onclick='addFriend(" + item.userid + ")'>Kết bạn</button>";
+                                    // Nếu họ bật công khai thì cho nhắn tin luôn
+                                    if (item.is_public) {
+                                        actionBtn += " <button class='btn-action chat' onclick='selectResult(" + item.userid + ", \"User\", \"" + item.fullname.replace(/'/g, "\\'") + "\")'>Nhắn tin lạ</button>";
+                                    }
+                                }
+                            }
+
+                            // Render giao diện: Bỏ onclick ở thẻ div to để tránh bấm nhầm
+                            resDiv.innerHTML += `
+                                <div class='user-item' style='border-bottom:1px solid #eee; padding:12px; display:flex; justify-content:space-between; align-items:center;'>
+                                    <div style="flex: 1;">
+                                        <i class='fas ${icon}'></i> 
+                                        <b>${item.fullname || item.name}</b>
+                                        <br><small style="color:#888">${item.username || ''}</small>
+                                    </div>
+                                    <div class="user-actions">
+                                        ${actionBtn}
+                                    </div>
+                                </div>`;
                         });
                     } else {
-                        resDiv.innerHTML = "<div style='padding:10px; color:#999;'>Không tìm thấy</div>";
+                        resDiv.innerHTML = "<div style='padding:10px; color:#999;'>Không tìm thấy số điện thoại</div>";
                         resDiv.style.display = 'block';
                     }
                 });
@@ -4323,6 +4377,72 @@
                 console.error('Error initializing upload button visibility:', e);
             }
         };
+        function displaySearchResults(users) {
+            const container = document.getElementById('search-results');
+            container.innerHTML = '';
+            
+            users.forEach(user => {
+                let actionBtn = '';
+                
+                if (user.friend_status === 'accepted') {
+                    // Đã là bạn -> Cho nhắn tin
+                    actionBtn = `<button onclick="startPrivateChat(${user.userid})">Nhắn tin</button>`;
+                } else if (user.friend_status === 'pending') {
+                    if (user.is_sender) {
+                        actionBtn = `<button disabled>Đã gửi lời mời</button>`;
+                    } else {
+                        actionBtn = `<button onclick="acceptFriend(${user.userid})">Chấp nhận kết bạn</button>`;
+                    }
+                } else {
+                    // Chưa có quan hệ gì
+                    let chatBtn = user.is_public ? `<button onclick="startPrivateChat(${user.userid})">Nhắn tin (Người lạ)</button>` : '';
+                    let addBtn = `<button onclick="addFriend(${user.userid})">Kết bạn</button>`;
+                    actionBtn = addBtn + chatBtn;
+                }
+
+                container.innerHTML += `
+                    <div class="search-item">
+                        <span>${user.fullname} (${user.username})</span>
+                        <div class="actions">${actionBtn}</div>
+                    </div>`;
+            });
+        }
+        // Hàm gửi lời mời kết bạn
+        function addFriend(targetId) {
+            fetch('/send_friend_request', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ target_id: targetId })
+            })
+            .then(res => res.json())
+            .then(data => {
+                if (data.success) {
+                    alert('Đã gửi lời mời kết bạn!');
+                    location.reload(); // Load lại để cập nhật trạng thái nút
+                }
+            });
+        }
+
+        // Hàm chấp nhận kết bạn
+        function acceptFriend(targetId) {
+            fetch('/accept_friend', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ target_id: targetId })
+            })
+            .then(res => res.json())
+            .then(data => {
+                if (data.success) {
+                    alert('Hai bạn đã trở thành bạn bè!');
+                    location.reload();
+                }
+            });
+        }
+
+        // Hàm bắt đầu chat riêng (đã có sẵn hoặc sửa lại cho chuẩn)
+        function startPrivateChat(targetId) {
+            window.location.href = `/private_room/${targetId}`;
+        }
     </script>
 </body>
 
