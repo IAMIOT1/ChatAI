@@ -3,8 +3,7 @@ Flask-SocketIO
 Flask-Mail
 Flask-Dance
 Werkzeug
-#pyodbc
-pymssql
+pyodbc
 eventlet
 python-dotenv
 pyotp
