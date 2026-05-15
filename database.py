@@ -190,13 +190,13 @@ class DatabaseManager:
         return DatabaseManager.execute_query(query, params)
     @staticmethod
     def get_user_by_phone(phone):
-        """Tìm user theo số điện thoại chuẩn Postgres"""
+        """Tìm kiếm người dùng bằng số điện thoại chuẩn Postgres"""
         try:
-            # SỬA: Lọc theo phone = ?
-            query = "SELECT id, username, password_hash, fullname, email, status FROM users WHERE phone = ?"
+            # SỬA: Đảm bảo lọc theo đúng cột phone và trả về các cột chuẩn viết liền
+            query = "SELECT id, username, fullname, phone, status FROM users WHERE phone = ?"
             return DatabaseManager.execute_query(query, (phone,), fetch_one=True)
         except Exception as e:
-            app_logger.error(f"Lỗi hàm get_user_by_phone: {e}")
+            app_logger.error(f"Lỗi khi tìm kiếm user theo số điện thoại: {e}")
             return None
     @staticmethod
     def get_user_by_username(username):
@@ -515,24 +515,20 @@ class DatabaseManager:
     
     @staticmethod
     def get_unread_counts(user_id):
-        """Lấy số lượng tin nhắn chưa đọc theo từng phòng"""
+        """Đếm số tin nhắn chưa đọc trong các phòng chat của người dùng"""
         try:
-            # room_id: để biết phòng nào có tin nhắn mới
-            # isread = 0 (hoặc FALSE nếu dùng kiểu Boolean)
-            # senderid != user_id: không đếm tin nhắn của chính mình
+            # SỬA: Đổi 'senderid' thành 'sender_id' có dấu gạch dưới
             query = """
-                SELECT room_id, COUNT(*) AS unread_count
-                FROM messages
-                WHERE isread = 0 AND senderid != ?
+                SELECT room_id, COUNT(*) 
+                FROM messages 
+                WHERE isread = 0 AND sender_id != %s 
                 GROUP BY room_id
             """
-            rows = DatabaseManager.execute_query(query, (user_id,), fetch_all=True)
-            
-            # Trả về dictionary: {room_id: count}
-            # Ví dụ: {1: 5, 2: 10} nghĩa là phòng 1 có 5 tin chưa đọc
-            return {row[0]: row[1] for row in rows} if rows else {}
+            # Đảm bảo truyền tham số dưới dạng tuple hợp lệ cho Postgres
+            results = DatabaseManager.execute_query(query, (int(user_id),), fetch_all=True)
+            return {row[0]: row[1] for row in results}
         except Exception as e:
-            app_logger.error(f"Lỗi lấy số tin nhắn chưa đọc của user {user_id}: {e}")
+            app_logger.error(f"Lỗi hàm get_unread_counts: {e}")
             return {}
     
     @staticmethod
