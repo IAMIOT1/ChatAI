@@ -30,7 +30,7 @@ CREATE TABLE IF NOT EXISTS friendships (
 );
 
 -- 4. BẢNG THÀNH VIÊN PHÒNG (Giữ nguyên)
-CREATE TABLE IF NOT EXISTS roomparticipants (
+CREATE TABLE IF NOT EXISTS room_participants (
     id INT NOT NULL,
     id INT NOT NULL,
     joinedat TIMESTAMP DEFAULT CURRENT_TIMESTAMP,

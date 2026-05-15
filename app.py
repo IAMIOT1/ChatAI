@@ -328,7 +328,7 @@ def create_group():
     query_friend_count = """
         SELECT COUNT(*) 
         FROM Rooms r
-        JOIN RoomParticipants rp ON r.room_id = rp.room_id
+        JOIN room_participants rp ON r.room_id = rp.room_id
         WHERE rp.user_id = %s AND r.is_group = FALSE
     """
     cursor.execute(query_friend_count, (user_id,))
@@ -995,13 +995,28 @@ Bạn có tin nhắn mới từ {sender_name}:
 
 
 @socketio.on('join')
-def handle_join(data):
-    """Handle user joining a room"""
-    room = data.get('room')
-    user = data.get('user')
-    join_room(room)
-    emit('response', {'user': 'System', 'msg': f'{user} đã tham gia phòng', 'room': room}, room=room)
-
+def on_join(data):
+    room_id = data.get('room_id')
+    user_id = current_user.id if current_user.is_authenticated else data.get('user_id')
+    
+    if not room_id or not user_id:
+        return
+        
+    join_room(str(room_id))
+    
+    try:
+        # SỬA: Chuyển toàn bộ sang room_participants (có gạch dưới)
+        check_query = "SELECT 1 FROM room_participants WHERE room_id = ? AND user_id = ?"
+        exists = DatabaseManager.execute_query(check_query, (room_id, user_id), fetch_one=True)
+        
+        if not exists:
+            insert_query = "INSERT INTO room_participants (room_id, user_id) VALUES (?, ?)"
+            DatabaseManager.execute_query(insert_query, (room_id, user_id))
+            
+            # Thông báo cho phòng có thành viên mới gia nhập
+            emit('status', {'msg': f'{current_user.username} đã tham gia phòng.'}, room=str(room_id))
+    except Exception as e:
+        app_logger.error(f"Lỗi khi user {user_id} tham gia phòng {room_id}: {e}")
 
 # WebRTC Signaling Events
 @socketio.on('video_call_offer')
@@ -1467,7 +1482,7 @@ def get_room_users(room_id):
         query = """
             SELECT DISTINCT u.id, u.Username, u.FullName
             FROM Users u
-            JOIN RoomParticipants rp ON u.id = rp.id
+            JOIN room_participants rp ON u.id = rp.id
             WHERE rp.id = ? AND u.Status = 'Online'
         """
         users = database.DatabaseManager.execute_query(query, (room_id,), fetch_all=True)

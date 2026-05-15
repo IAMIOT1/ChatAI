@@ -287,7 +287,7 @@ class DatabaseManager:
     def ensure_room_participants_table():
         try:
             query = """
-                CREATE TABLE IF NOT EXISTS roomparticipants (
+                CREATE TABLE IF NOT EXISTS room_participants (
                     room_id INTEGER REFERENCES rooms(id) ON DELETE CASCADE,
                     user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
                     joinedat TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -296,7 +296,7 @@ class DatabaseManager:
             """
             DatabaseManager.execute_query(query)
         except Exception as e:
-            app_logger.error(f"RoomParticipants table creation error: {e}")
+            app_logger.error(f"room_participants table creation error: {e}")
     
     @staticmethod
     def ensure_user_auth_columns():
@@ -737,9 +737,9 @@ class DatabaseManager:
                     COALESCE(unread.unreadcount, 0) AS unreadcount
                 FROM rooms r
                 -- Tham gia của chính mình
-                JOIN roomparticipants rp2 ON rp2.room_id = r.id AND rp2.user_id = ?
+                JOIN room_participants rp2 ON rp2.room_id = r.id AND rp2.user_id = ?
                 -- Tham gia của đối phương (người còn lại trong phòng 1-1)
-                JOIN roomparticipants rp ON rp.room_id = r.id AND rp.user_id != ?
+                JOIN room_participants rp ON rp.room_id = r.id AND rp.user_id != ?
                 JOIN users u ON u.id = rp.user_id
                 -- Lấy tin nhắn cuối cùng
                 LEFT JOIN LATERAL (
@@ -811,7 +811,7 @@ class DatabaseManager:
             if room_id:
                 # 2. Thêm người tạo vào phòng với quyền Admin/Chủ phòng
                 # SỬA LỖI: Cột phải là room_id và user_id
-                query = "INSERT INTO roomparticipants (room_id, user_id) VALUES (?, ?)"
+                query = "INSERT INTO room_participants (room_id, user_id) VALUES (?, ?)"
                 DatabaseManager.execute_query(query, (room_id, user_id))
                 
                 app_logger.info(f"User {user_id} đã tạo nhóm mới: {group_name} (ID: {room_id})")
@@ -846,12 +846,12 @@ class DatabaseManager:
 
             if not room_id: return None
             
-            # 3. Đảm bảo cả 2 đều có tên trong danh sách tham gia (roomparticipants)
+            # 3. Đảm bảo cả 2 đều có tên trong danh sách tham gia (room_participants)
             for p_id in [user_id, target_user_id]:
                 # Kiểm tra xem đã tham gia chưa để tránh lỗi trùng khóa (Duplicate)
-                check = "SELECT 1 FROM roomparticipants WHERE room_id = ? AND user_id = ?"
+                check = "SELECT 1 FROM room_participants WHERE room_id = ? AND user_id = ?"
                 if not DatabaseManager.query_exists(check, (room_id, p_id)):
-                    insert_p = "INSERT INTO roomparticipants (room_id, user_id) VALUES (?, ?)"
+                    insert_p = "INSERT INTO room_participants (room_id, user_id) VALUES (?, ?)"
                     DatabaseManager.execute_query(insert_p, (room_id, p_id))
             
             # 4. Lấy tên người nhận để hiển thị tiêu đề chat
@@ -1631,7 +1631,7 @@ class DatabaseManager:
             DatabaseManager.ensure_room_roles_table()
             
             # SỬA LỖI: Phân biệt cột room_id và user_id
-            # Nếu bảng roomroles của Tới dùng tên cột khác, hãy điều chỉnh cho khớp nhé
+            # Nếu bảng room_roles của Tới dùng tên cột khác, hãy điều chỉnh cho khớp nhé
             rr_query = "SELECT role FROM room_roles WHERE room_id = ? AND user_id = ?"
             rr = DatabaseManager.execute_query(rr_query, (room_id, user_id), fetch_one=True)
             
