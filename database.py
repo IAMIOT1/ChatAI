@@ -582,7 +582,7 @@ class DatabaseManager:
             query = """
                 SELECT r.id,
                     r.room_name,
-                    r.groupavatar,
+                    r.group_avatar,
                     COALESCE(last_msg.content_display, 'Chưa có tin nhắn') AS lastmessage,
                     last_msg.sentat AS lastsentat,
                     COALESCE(unread.unreadcount, 0) AS unreadcount
@@ -643,7 +643,7 @@ class DatabaseManager:
             query = """
                 SELECT r.id,
                     r.room_name,
-                    r.groupavatar,
+                    r.group_avatar,
                     COALESCE(last_msg.content_display, 'Chưa có tin nhắn') AS lastmessage,
                     last_msg.sentat AS lastsentat,
                     COALESCE(unread.unreadcount, 0) AS unreadcount
