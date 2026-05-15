@@ -2961,12 +2961,12 @@ def analytics_export():
 def google_verification():
     return send_from_directory('.', 'google4e20d9f91e4489f6.html')
 
+
 @app.route('/robots.txt')
-def static_from_root():
-    return send_from_directory(app.static_folder, request.path[1:])
+def robots_txt():
+    # Trả về tệp robots.txt từ thư mục static
+    return send_from_directory(os.path.join(app.root_path, 'static'), 'robots.txt')
 
-
-    
 if __name__ == "__main__":
 
     database.DatabaseManager.init_db_from_file()
