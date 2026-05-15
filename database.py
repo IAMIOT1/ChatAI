@@ -4,7 +4,7 @@
 Database management module for ChatAI application
 """
 import psycopg2
-import pyodbc
+#import pyodbc
 import os
 from datetime import datetime, timedelta
 from werkzeug.security import generate_password_hash
