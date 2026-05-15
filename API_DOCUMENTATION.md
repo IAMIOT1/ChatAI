@@ -331,7 +331,7 @@ Lấy lịch sử tin nhắn của phòng.
     "messages": [
         {
             "message_id": 1,
-            "sender_id": 123,
+            "senderid": 123,
             "sender_name": "John Doe",
             "content": "Hello world",
             "type": "text",

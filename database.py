@@ -217,13 +217,13 @@ class DatabaseManager:
             
             if reply_to_message_id:
                 query = """
-                    INSERT INTO messages (room_id, sender_id, content, messagetype, isread, sentat, reply_to_message_id)
+                    INSERT INTO messages (room_id, senderid, content, messagetype, isread, sentat, reply_to_message_id)
                     VALUES (?, ?, ?, ?, 0, GETDATE(), ?)
                 """
                 params = (room_id, user_id, content, msg_type, reply_to_message_id)
             else:
                 query = """
-                    INSERT INTO messages (room_id, sender_id, content, messagetype, isread, sentat)
+                    INSERT INTO messages (room_id, senderid, content, messagetype, isread, sentat)
                     VALUES (?, ?, ?, ?, 0, GETDATE())
                 """
                 params = (room_id, user_id, content, msg_type)
@@ -236,12 +236,12 @@ class DatabaseManager:
     def get_room_messages(room_id, limit=50):
         try:
             # Cột khóa chính của messages giờ là 'id'
-            # Cột khóa ngoại là 'room_id' và 'sender_id'
+            # Cột khóa ngoại là 'room_id' và 'senderid'
             query = """
                 SELECT m.id, m.content, m.messagetype, m.sentat, m.isread,
                     u.username as sendername, u.id as senderid, m.reply_to_message_id
                 FROM messages m
-                JOIN users u ON m.sender_id = u.id
+                JOIN users u ON m.senderid = u.id
                 WHERE m.room_id = ? AND m.isdeleted = FALSE
                 ORDER BY m.sentat DESC
                 LIMIT {}
@@ -519,11 +519,11 @@ class DatabaseManager:
         try:
             # room_id: để biết phòng nào có tin nhắn mới
             # isread = 0 (hoặc FALSE nếu dùng kiểu Boolean)
-            # sender_id != user_id: không đếm tin nhắn của chính mình
+            # senderid != user_id: không đếm tin nhắn của chính mình
             query = """
                 SELECT room_id, COUNT(*) AS unread_count
                 FROM messages
-                WHERE isread = 0 AND sender_id != ?
+                WHERE isread = 0 AND senderid != ?
                 GROUP BY room_id
             """
             rows = DatabaseManager.execute_query(query, (user_id,), fetch_all=True)
@@ -603,7 +603,7 @@ class DatabaseManager:
                 LEFT JOIN (
                     SELECT room_id, COUNT(*) AS unreadcount -- SỬA: dùng room_id
                     FROM messages
-                    WHERE isread = 0 AND sender_id != ?    -- SỬA: dùng sender_id
+                    WHERE isread = 0 AND senderid != ?    -- SỬA: dùng senderid
                     GROUP BY room_id                        -- SỬA: dùng room_id
                 ) unread ON unread.room_id = r.id
                 WHERE r.isgroup = TRUE
@@ -664,7 +664,7 @@ class DatabaseManager:
                 LEFT JOIN (
                     SELECT room_id, COUNT(*) AS unreadcount -- SỬA: room_id
                     FROM messages
-                    WHERE isread = 0 AND sender_id != ?    -- SỬA: sender_id
+                    WHERE isread = 0 AND senderid != ?    -- SỬA: senderid
                     GROUP BY room_id                        -- SỬA: room_id
                 ) unread ON unread.room_id = r.id
                 WHERE r.isgroup = TRUE
@@ -727,7 +727,7 @@ class DatabaseManager:
     def get_private_rooms(user_id):
         """Lấy danh sách phòng chat cá nhân (Đã sửa lỗi tham chiếu cột cho Postgres)"""
         try:
-            # Sử dụng đúng tên cột: room_id, user_id, sender_id
+            # Sử dụng đúng tên cột: room_id, user_id, senderid
             query = """
                 SELECT r.id,
                     r.room_name,
@@ -759,7 +759,7 @@ class DatabaseManager:
                 LEFT JOIN (
                     SELECT room_id, COUNT(*) AS unreadcount
                     FROM messages
-                    WHERE isread = 0 AND sender_id != ?  -- SỬA: sender_id thay vì senderid
+                    WHERE isread = 0 AND senderid != ?  -- SỬA: senderid thay vì senderid
                     GROUP BY room_id
                 ) unread ON unread.room_id = r.id
                 WHERE r.isgroup = FALSE
@@ -877,12 +877,12 @@ class DatabaseManager:
                     ORDER BY created_at DESC
                 """
             elif export_type == 'messages':
-                # Sử dụng các tên cột có gạch dưới: message_id, sender_id, sent_at
+                # Sử dụng các tên cột có gạch dưới: message_id, senderid, sent_at
                 query = """
                     SELECT m.id, m.content, m.messagetype, m.sent_at,
                         u.username as sendername
                     FROM messages m
-                    JOIN users u ON m.sender_id = u.id
+                    JOIN users u ON m.senderid = u.id
                     ORDER BY m.sent_at DESC
                 """
             elif export_type == 'rooms':
@@ -914,10 +914,10 @@ class DatabaseManager:
             # SỬA: m.room_id = ? thay vì m.id = ?
             # SỬA: m.is_deleted thay vì m.isdeleted
             query = """
-                SELECT m.id, m.sender_id, u.fullname as sendername, m.content, m.messagetype,
+                SELECT m.id, m.senderid, u.fullname as sendername, m.content, m.messagetype,
                     m.sent_at, m.isread, m.edited_at, m.is_deleted, m.deleted_at
                 FROM messages m
-                JOIN users u ON m.sender_id = u.id
+                JOIN users u ON m.senderid = u.id
                 WHERE m.room_id = ? AND (m.is_deleted IS FALSE OR m.is_deleted IS NULL)
                 ORDER BY m.sent_at ASC
                 LIMIT ?
@@ -929,7 +929,7 @@ class DatabaseManager:
                 for msg in messages:
                     result.append({
                         'message_id': msg[0],
-                        'sender_id': msg[1],
+                        'senderid': msg[1],
                         'sender_name': msg[2],
                         'content': msg[3],
                         'type': msg[4],
@@ -950,11 +950,11 @@ class DatabaseManager:
         """Đánh dấu tin nhắn đã đọc trong một phòng (Tối ưu Postgres)"""
         try:
             # SỬA: Dùng room_id để lọc tin nhắn trong phòng đó
-            # SỬA: Dùng sender_id và is_read theo chuẩn gạch dưới
+            # SỬA: Dùng senderid và is_read theo chuẩn gạch dưới
             query = """
                 UPDATE messages 
                 SET isread = TRUE 
-                WHERE room_id = ? AND sender_id != ? AND isread = FALSE
+                WHERE room_id = ? AND senderid != ? AND isread = FALSE
             """
             return DatabaseManager.execute_query(query, (room_id, user_id))
         except Exception as e:
@@ -966,8 +966,8 @@ class DatabaseManager:
         """Chỉnh sửa tin nhắn (Khớp chuẩn Postgres)"""
         try:
             # 1. Kiểm tra quyền sở hữu (Chỉ người gửi mới được sửa)
-            # SỬA: Dùng id thay vì messageid, sender_id thay vì senderid
-            query = "SELECT sender_id FROM messages WHERE id = ?"
+            # SỬA: Dùng id thay vì messageid, senderid thay vì senderid
+            query = "SELECT senderid FROM messages WHERE id = ?"
             message = DatabaseManager.execute_query(query, (message_id,), fetch_one=True)
             
             if not message or message[0] != user_id:
@@ -987,7 +987,7 @@ class DatabaseManager:
         """Xóa tin nhắn (Soft delete - Vẫn giữ trong DB nhưng ẩn trên UI)"""
         try:
             # 1. Kiểm tra quyền sở hữu
-            query = "SELECT sender_id FROM messages WHERE id = ?"
+            query = "SELECT senderid FROM messages WHERE id = ?"
             message = DatabaseManager.execute_query(query, (message_id,), fetch_one=True)
             
             if not message or message[0] != user_id:
@@ -1273,7 +1273,7 @@ class DatabaseManager:
             query_top = """
                 SELECT u.fullname, COUNT(m.id) as message_count
                 FROM users u
-                INNER JOIN messages m ON u.id = m.sender_id
+                INNER JOIN messages m ON u.id = m.senderid
                 WHERE m.sent_at >= CURRENT_DATE - (INTERVAL '1 day' * ?)
                 GROUP BY u.id, u.fullname
                 ORDER BY message_count DESC
@@ -1308,7 +1308,7 @@ class DatabaseManager:
             # SỬA: m.room_id thay vì m.id để khớp với cấu trúc bảng messages
             query_top = """
                 SELECT r.room_name, COUNT(m.id) as message_count,
-                    COUNT(DISTINCT m.sender_id) as active_users
+                    COUNT(DISTINCT m.senderid) as active_users
                 FROM rooms r
                 INNER JOIN messages m ON r.id = m.room_id
                 WHERE m.sent_at >= CURRENT_DATE - (INTERVAL '1 day' * ?)
@@ -1759,11 +1759,11 @@ class DatabaseManager:
     def save_message(user_id, content, msg_type='Text', room_id=1, reply_to_id=None):
         """Lưu tin nhắn vào database (Chuẩn PostgreSQL Render)"""
         try:
-            # SỬA: Đồng bộ tên cột (sender_id, message_type, room_id, reply_to_id, is_read)
+            # SỬA: Đồng bộ tên cột (senderid, message_type, room_id, reply_to_id, is_read)
             # Bỏ qua cột id (khóa chính) để Postgres SERIAL tự sinh số
             query = """
                 INSERT INTO messages (
-                    sender_id, content, message_type, room_id, 
+                    senderid, content, message_type, room_id, 
                     reply_to_id, sent_at, is_read
                 )
                 VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, FALSE)
@@ -1805,7 +1805,7 @@ class DatabaseManager:
             # Bỏ qua cột id (SERIAL) để Postgres tự sinh số
             query = """
                 INSERT INTO messages (
-                    sender_id, content, message_type, room_id, 
+                    senderid, content, message_type, room_id, 
                     forwarded_from_id, sent_at, is_read
                 )
                 VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, FALSE)
@@ -1831,11 +1831,11 @@ class DatabaseManager:
     def save_message(user_id, content, msg_type='Text', room_id=1, reply_to_id=None):
         """Lưu tin nhắn vào database (Chuẩn Postgres Render)"""
         try:
-            # SỬA: Đồng bộ tên cột (sender_id, content, message_type, room_id, reply_to_id)
+            # SỬA: Đồng bộ tên cột (senderid, content, message_type, room_id, reply_to_id)
             # Bỏ qua cột ID tự tăng (SERIAL)
             query = """
                 INSERT INTO messages (
-                    sender_id, content, message_type, room_id, 
+                    senderid, content, message_type, room_id, 
                     reply_to_id, sent_at, is_read
                 )
                 VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, FALSE)
@@ -1876,7 +1876,7 @@ class DatabaseManager:
             # 3. Chèn tin nhắn mới (Copy nội dung từ gốc nhưng người gửi là người Forward)
             query = """
                 INSERT INTO messages (
-                    sender_id, content, message_type, room_id, 
+                    senderid, content, message_type, room_id, 
                     forwarded_from_id, sent_at, is_read
                 )
                 VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, FALSE)
@@ -2180,12 +2180,12 @@ class DatabaseManager:
             offset = (page - 1) * limit
             search_pattern = f"%{search_text}%"
             
-            # SỬA: Đồng bộ tên cột message_id, sender_id, message_type, sent_at...
+            # SỬA: Đồng bộ tên cột message_id, senderid, message_type, sent_at...
             search_query = """
-                SELECT m.id, m.sender_id, u.fullname as sender_name, m.content,
+                SELECT m.id, m.senderid, u.fullname as sender_name, m.content,
                     m.message_type, m.sent_at, m.edited_at, m.is_deleted
                 FROM messages m
-                JOIN users u ON m.sender_id = u.id
+                JOIN users u ON m.senderid = u.id
                 WHERE m.room_id = ? 
                 AND (m.is_deleted IS FALSE OR m.is_deleted IS NULL)
                 AND (m.content ILIKE ? OR u.fullname ILIKE ?)
@@ -2202,7 +2202,7 @@ class DatabaseManager:
             count_query = """
                 SELECT COUNT(*)
                 FROM messages m
-                JOIN users u ON m.sender_id = u.id
+                JOIN users u ON m.senderid = u.id
                 WHERE m.room_id = ? 
                 AND (m.is_deleted IS FALSE OR m.is_deleted IS NULL)
                 AND (m.content ILIKE ? OR u.fullname ILIKE ?)
@@ -2217,7 +2217,7 @@ class DatabaseManager:
             return {
                 'messages': [{
                     'message_id': msg[0],
-                    'sender_id': msg[1],
+                    'senderid': msg[1],
                     'sender_name': msg[2],
                     'content': msg[3],
                     'message_type': msg[4],
@@ -2243,11 +2243,11 @@ class DatabaseManager:
             # SỬA: Phân biệt rõ m.id (room_id), rp.room_id và rp.user_id
             # SỬA: Đồng bộ tên cột message_type, sent_at, is_deleted, room_name...
             search_query = """
-                SELECT DISTINCT m.id as message_id, m.sender_id, u.fullname as sender_name, m.content,
+                SELECT DISTINCT m.id as message_id, m.senderid, u.fullname as sender_name, m.content,
                     m.message_type, m.sent_at, m.room_id, r.room_name,
                     CASE WHEN r.is_group IS TRUE THEN r.room_name ELSE 'Chat riêng' END as room_display_name
                 FROM messages m
-                JOIN users u ON m.sender_id = u.id
+                JOIN users u ON m.senderid = u.id
                 JOIN rooms r ON m.room_id = r.id
                 JOIN room_participants rp ON r.id = rp.room_id
                 WHERE rp.user_id = ? 
@@ -2266,7 +2266,7 @@ class DatabaseManager:
             count_query = """
                 SELECT COUNT(DISTINCT m.id)
                 FROM messages m
-                JOIN users u ON m.sender_id = u.id
+                JOIN users u ON m.senderid = u.id
                 JOIN rooms r ON m.room_id = r.id
                 JOIN room_participants rp ON r.id = rp.room_id
                 WHERE rp.user_id = ? 
@@ -2283,7 +2283,7 @@ class DatabaseManager:
             return {
                 'messages': [{
                     'message_id': msg[0],
-                    'sender_id': msg[1],
+                    'senderid': msg[1],
                     'sender_name': msg[2],
                     'content': msg[3],
                     'type': msg[4],
@@ -2476,12 +2476,12 @@ class DatabaseManager:
             search_pattern = f"%{query_text}%"
             
             # SỬA: m.id thành m.room_id để lọc đúng phòng chat
-            # SỬA: Đồng bộ các cột message_id -> id, senderid -> sender_id, messagetype -> message_type...
+            # SỬA: Đồng bộ các cột message_id -> id, senderid -> senderid, messagetype -> message_type...
             search_query = """
-                SELECT m.id, m.sender_id, u.fullname as sender_name, m.content,
+                SELECT m.id, m.senderid, u.fullname as sender_name, m.content,
                     m.message_type, m.sent_at, m.edited_at, m.is_deleted
                 FROM messages m
-                JOIN users u ON m.sender_id = u.id
+                JOIN users u ON m.senderid = u.id
                 WHERE m.room_id = ? AND (m.is_deleted IS FALSE OR m.is_deleted IS NULL)
                 AND (m.content ILIKE ? OR u.fullname ILIKE ?)
                 ORDER BY m.sent_at DESC
@@ -2497,7 +2497,7 @@ class DatabaseManager:
             count_query = """
                 SELECT COUNT(*)
                 FROM messages m
-                JOIN users u ON m.sender_id = u.id
+                JOIN users u ON m.senderid = u.id
                 WHERE m.room_id = ? AND (m.is_deleted IS FALSE OR m.is_deleted IS NULL)
                 AND (m.content ILIKE ? OR u.fullname ILIKE ?)
             """
@@ -2511,7 +2511,7 @@ class DatabaseManager:
             return {
                 'messages': [{
                     'message_id': msg[0],
-                    'sender_id': msg[1],
+                    'senderid': msg[1],
                     'sender_name': msg[2],
                     'content': msg[3],
                     'message_type': msg[4],
@@ -2537,11 +2537,11 @@ class DatabaseManager:
             # SỬA LỖI: Chỉ định rõ m.room_id, r.id, rp.room_id và rp.user_id
             # PostgreSQL cần sự tường minh để không bị lẫn lộn giữa ID tin nhắn và ID phòng
             search_query = """
-                SELECT DISTINCT m.id, m.sender_id, u.fullname as sender_name, m.content,
+                SELECT DISTINCT m.id, m.senderid, u.fullname as sender_name, m.content,
                     m.message_type, m.sent_at, m.room_id, r.room_name,
                     CASE WHEN r.is_group IS TRUE THEN r.room_name ELSE 'Chat riêng' END as room_display_name
                 FROM messages m
-                JOIN users u ON m.sender_id = u.id
+                JOIN users u ON m.senderid = u.id
                 JOIN rooms r ON m.room_id = r.id
                 JOIN room_participants rp ON r.id = rp.room_id
                 WHERE rp.user_id = ? 
@@ -2560,7 +2560,7 @@ class DatabaseManager:
             count_query = """
                 SELECT COUNT(DISTINCT m.id)
                 FROM messages m
-                JOIN users u ON m.sender_id = u.id
+                JOIN users u ON m.senderid = u.id
                 JOIN rooms r ON m.room_id = r.id
                 JOIN room_participants rp ON r.id = rp.room_id
                 WHERE rp.user_id = ? 
@@ -2577,7 +2577,7 @@ class DatabaseManager:
             return {
                 'messages': [{
                     'message_id': msg[0],
-                    'sender_id': msg[1],
+                    'senderid': msg[1],
                     'sender_name': msg[2],
                     'content': msg[3],
                     'type': msg[4],
@@ -2724,11 +2724,11 @@ class DatabaseManager:
             daily_stats = [{'date': str(row[0]), 'count': row[1]} for row in daily_stats_raw]
             
             # 2. Top 10 người dùng tích cực nhất (30 ngày qua)
-            # SỬA: m.senderid -> m.sender_id, m.messageid -> m.id
+            # SỬA: m.senderid -> m.senderid, m.messageid -> m.id
             top_users_query = """
                 SELECT u.fullname, COUNT(m.id) as msg_count
                 FROM users u
-                LEFT JOIN messages m ON u.id = m.sender_id
+                LEFT JOIN messages m ON u.id = m.senderid
                                     AND m.sent_at >= CURRENT_DATE - INTERVAL '30 days'
                 GROUP BY u.id, u.fullname
                 ORDER BY msg_count DESC
@@ -2873,7 +2873,7 @@ class DatabaseManager:
         """Đảm bảo bảng voice_messages tồn tại (Chuẩn Postgres Render)"""
         try:
             # SỬA LỖI LOGIC: Dùng trực tiếp IF NOT EXISTS của Postgres thay vì check column_exists trên bảng chưa tạo
-            # SỬA TÊN CỘT: Đồng bộ sang chuẩn snake_case (id -> voice_id, uploadedby -> sender_id, id phòng -> room_id...)
+            # SỬA TÊN CỘT: Đồng bộ sang chuẩn snake_case (id -> voice_id, uploadedby -> senderid, id phòng -> room_id...)
             create_table_query = """
                 CREATE TABLE IF NOT EXISTS voice_messages (
                     id SERIAL PRIMARY KEY,
@@ -2881,10 +2881,10 @@ class DatabaseManager:
                     filepath VARCHAR(500) NOT NULL,
                     duration INT NULL,
                     file_size INT NOT NULL,
-                    sender_id INT NOT NULL,
+                    senderid INT NOT NULL,
                     room_id INT NULL,
                     sent_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    FOREIGN KEY (sender_id) REFERENCES users(id) ON DELETE CASCADE,
+                    FOREIGN KEY (senderid) REFERENCES users(id) ON DELETE CASCADE,
                     FOREIGN KEY (room_id) REFERENCES rooms(id) ON DELETE CASCADE
                 )
             """
@@ -2900,9 +2900,9 @@ class DatabaseManager:
             DatabaseManager.ensure_voice_messages_table()
             
             # 2. Thực hiện chèn dữ liệu
-            # SỬA: Khớp 100% với tên cột mới (file_size, sender_id, room_id)
+            # SỬA: Khớp 100% với tên cột mới (file_size, senderid, room_id)
             query = """
-                INSERT INTO voice_messages (filename, filepath, file_size, sender_id, room_id, duration)
+                INSERT INTO voice_messages (filename, filepath, file_size, senderid, room_id, duration)
                 VALUES (?, ?, ?, ?, ?, ?)
             """
             DatabaseManager.execute_query(query, (filename, filepath, filesize, uploaded_by, room_id, duration))
@@ -2920,12 +2920,12 @@ class DatabaseManager:
                 return []
             
             # 2. Truy vấn dữ liệu (Sử dụng chuẩn snake_case)
-            # SỬA: voiceid -> id, uploadedby -> sender_id, id -> room_id
+            # SỬA: voiceid -> id, uploadedby -> senderid, id -> room_id
             query = """
                 SELECT vm.id, vm.filename, vm.filepath, vm.duration,
                     vm.file_size, vm.sent_at, u.fullname as sender_name
                 FROM voice_messages vm
-                JOIN users u ON vm.sender_id = u.id
+                JOIN users u ON vm.senderid = u.id
                 WHERE vm.room_id = ?
                 ORDER BY vm.sent_at DESC
             """
@@ -3157,11 +3157,11 @@ class DatabaseManager:
         try:
             DatabaseManager.ensure_reply_column()
             
-            # SỬA: messageid -> id, senderid -> sender_id, messagetype -> message_type, sentat -> sent_at
+            # SỬA: messageid -> id, senderid -> senderid, messagetype -> message_type, sentat -> sent_at
             query = """
                 SELECT m.id, m.content, m.message_type, u.fullname as sender_name, m.sent_at
                 FROM messages m
-                JOIN users u ON m.sender_id = u.id
+                JOIN users u ON m.senderid = u.id
                 WHERE m.id = ?
             """
             result = DatabaseManager.execute_query(query, (message_id,), fetch_one=True)
@@ -3199,15 +3199,15 @@ class DatabaseManager:
         try:
             DatabaseManager.ensure_pinned_column()
             
-            # 1. Kiểm tra sự tồn tại của tin nhắn và lấy ra người gửi (SỬA: sender_id, id)
-            query = "SELECT sender_id FROM messages WHERE id = ?"
+            # 1. Kiểm tra sự tồn tại của tin nhắn và lấy ra người gửi (SỬA: senderid, id)
+            query = "SELECT senderid FROM messages WHERE id = ?"
             result = DatabaseManager.execute_query(query, (message_id,), fetch_one=True)
             if not result:
                 return False
             
-            sender_id = result[0]
+            senderid = result[0]
             # 2. Kiểm tra quyền hạn: Nếu không phải người gửi THÌ phải là Admin
-            if sender_id != user_id:
+            if senderid != user_id:
                 # Tận dụng hàm is_admin đã viết trước đó của Tới để kiểm tra nhanh
                 if not DatabaseManager.is_admin(user_id):
                     app_logger.warning(f"User {user_id} không có quyền ghim tin nhắn {message_id}")
@@ -3248,9 +3248,9 @@ class DatabaseManager:
             # QUAN TRỌNG: Sửa m.id thành m.room_id ở mệnh đề WHERE
             query = """
                 SELECT m.id, m.content, m.message_type, m.sent_at, m.reply_to_message_id,
-                    u.fullname as sender_name, u.id as sender_id
+                    u.fullname as sender_name, u.id as senderid
                 FROM messages m
-                JOIN users u ON m.sender_id = u.id
+                JOIN users u ON m.senderid = u.id
                 WHERE m.room_id = ? AND m.is_pinned IS TRUE AND m.is_deleted IS FALSE
                 ORDER BY m.sent_at DESC
             """
@@ -3264,7 +3264,7 @@ class DatabaseManager:
                 'sent_at': row[3].strftime('%H:%M %d/%m/%Y') if row[3] else '',
                 'reply_to_message_id': row[4],
                 'sender_name': row[5],
-                'sender_id': row[6]
+                'senderid': row[6]
             } for row in messages_raw]
         except Exception as e:
             app_logger.error(f"Lỗi lấy danh sách tin nhắn ghim của phòng {room_id}: {e}")
@@ -3368,7 +3368,7 @@ class DatabaseManager:
             return [{
                 'mention_id': row[0],
                 'message_id': row[1],
-                'sender_id': row[2],
+                'senderid': row[2],
                 'createdat': row[3].strftime('%H:%M %d/%m/%Y') if row[3] else '',
                 'is_read': row[4],
                 'message_content': row[5],

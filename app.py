@@ -264,7 +264,7 @@ def index():
         cur = conn.cursor()
         cur.execute("""
             SELECT COUNT(*) FROM friendships 
-            WHERE (sender_id = %s OR receiver_id = %s) AND status = 'accepted'
+            WHERE (senderid = %s OR receiverid = %s) AND status = 'accepted'
         """, (user_id, user_id))
         friend_count = cur.fetchone()[0]
         cur.close()
@@ -416,7 +416,7 @@ def add_friend():
     try:
         conn = DatabaseManager.get_db_connection()
         cur = conn.cursor()
-        cur.execute("INSERT INTO friendships (sender_id, receiver_id, status) VALUES (%s, %s, 'pending') ON CONFLICT DO NOTHING", (user_id, target_id))
+        cur.execute("INSERT INTO friendships (senderid, receiverid, status) VALUES (%s, %s, 'pending') ON CONFLICT DO NOTHING", (user_id, target_id))
         conn.commit()
         cur.close()
         conn.close()
@@ -432,7 +432,7 @@ def accept_friend():
     try:
         conn = DatabaseManager.get_db_connection()
         cur = conn.cursor()
-        cur.execute("UPDATE friendships SET status = 'accepted' WHERE sender_id = %s AND receiver_id = %s", (target_id, user_id))
+        cur.execute("UPDATE friendships SET status = 'accepted' WHERE senderid = %s AND receiverid = %s", (target_id, user_id))
         conn.commit()
         cur.close()
         conn.close()
@@ -446,18 +446,18 @@ def send_friend_request():
         return jsonify({'success': False, 'message': 'Chưa đăng nhập'})
     
     data = request.get_json()
-    receiver_id = data.get('target_id')
-    sender_id = session['user_id']
+    receiverid = data.get('target_id')
+    senderid = session['user_id']
 
     try:
         conn = DatabaseManager.get_db_connection()
         cur = conn.cursor()
         # Thêm lời mời mới
         cur.execute("""
-            INSERT INTO friendships (sender_id, receiver_id, status)
+            INSERT INTO friendships (senderid, receiverid, status)
             VALUES (%s, %s, 'pending')
             ON CONFLICT DO NOTHING
-        """, (sender_id, receiver_id))
+        """, (senderid, receiverid))
         conn.commit()
         cur.close()
         conn.close()

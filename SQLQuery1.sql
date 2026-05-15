@@ -22,11 +22,11 @@ CREATE TABLE IF NOT EXISTS rooms (
 -- 3. BẢNG KẾT BẠN (QUAN TRỌNG NHẤT CHO LOGIC MỚI)
 CREATE TABLE IF NOT EXISTS friendships (
     request_id SERIAL PRIMARY KEY,
-    sender_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
-    receiver_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+    senderid INTEGER REFERENCES users(id) ON DELETE CASCADE,
+    receiverid INTEGER REFERENCES users(id) ON DELETE CASCADE,
     status VARCHAR(20) DEFAULT 'pending', -- 'pending' (chờ), 'accepted' (đã là bạn)
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE(sender_id, receiver_id)
+    UNIQUE(senderid, receiverid)
 );
 
 -- 4. BẢNG THÀNH VIÊN PHÒNG (Giữ nguyên)
