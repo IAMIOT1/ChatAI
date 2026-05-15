@@ -416,58 +416,54 @@ def search_users():
 
 @app.route('/api/search_friend', methods=['GET'])
 def search_friend():
-    # Lấy số điện thoại từ tham số query truyền lên và xóa khoảng trắng thừa
-    phone = request.args.get('phone', '').strip()
+    # SỬA: Lấy tham số 'username' truyền từ giao diện lên thay vì 'phone'
+    search_name = request.args.get('username', '').strip()
     current_user_id = session.get('user_id')
 
-    # Nếu không nhập số điện thoại hoặc chưa đăng nhập thì trả về mảng rỗng
-    if not phone or not current_user_id:
+    if not search_name or not current_user_id:
         return jsonify([])
 
     conn = None
     cursor = None
-    
     try:
-        # Lấy kết nối Database chuẩn Postgres
         conn = DatabaseManager.get_db_connection()
         cursor = conn.cursor()
         
-        # Câu lệnh SQL chuẩn Postgres:
-        # 1. Sử dụng cột 'phone' viết thường hoàn toàn khớp với DB thực tế.
-        # 2. Sử dụng '%s' làm placeholder thay vì '?' (Postgres không nhận '?').
-        # 3. Thêm điều kiện 'id != %s' để tự loại trừ chính mình ra khỏi danh sách tìm kiếm bạn bè.
+        # CẢI TIẾN SQL: 
+        # 1. Sử dụng ILIKE để tìm kiếm KHÔNG PHÂN BIỆT HOA THƯỜNG (ví dụ gõ 'toi' vẫn ra 'Nguyễn Lâm Tới')
+        # 2. Sử dụng dấu % để tìm kiếm gần đúng (chứa ký tự nhập vào)
+        # 3. Tìm theo cả tên tài khoản (username) HOẶC họ tên hiển thị (fullname)
         query = """
             SELECT id, username, fullname, phone, status 
             FROM users 
-            WHERE phone = %s AND id != %s
+            WHERE (username ILIKE %s OR fullname ILIKE %s) 
+              AND id != %s
         """
+        search_param = f"%{search_name}%"
         
-        cursor.execute(query, (phone, int(current_user_id)))
-        user_row = cursor.fetchone()
+        cursor.execute(query, (search_param, search_param, int(current_user_id)))
         
-        # Nếu tìm thấy người dùng khớp với số điện thoại
-        if user_row:
-            result = {
-                "id": user_row[0],
-                "username": user_row[1],
-                "fullname": user_row[2],
-                "phone": user_row[3],
-                "status": user_row[4]
-            }
-            return jsonify([result]) # Trả về mảng chứa 1 object giống cấu trúc Frontend mong đợi
+        # Vì tìm theo tên gần đúng có thể ra nhiều người, ta dùng fetchall() để lấy danh sách
+        users_rows = cursor.fetchall()
+        
+        result = []
+        for row in users_rows:
+            result.append({
+                "id": row[0],
+                "username": row[1],
+                "fullname": row[2],
+                "phone": row[3],
+                "status": row[4]
+            })
             
-        return jsonify([]) # Không tìm thấy thì trả về mảng rỗng
+        return jsonify(result) # Trả về danh sách tất cả những người khớp tên
         
     except Exception as e:
-        print(f"Lỗi API search_friend: {e}")
-        return jsonify({"error": "Lỗi hệ thống khi tìm kiếm"}), 500
-        
+        app_logger.error(f"Lỗi API search_friend: {e}")
+        return jsonify({"error": str(e)}), 500
     finally:
-        # Bắt buộc đóng cursor và connection để không bị nghẽn (treo) DB trên Render
-        if cursor:
-            cursor.close()
-        if conn:
-            conn.close()
+        if cursor: cursor.close()
+        if conn: conn.close()
 
 # Route gửi lời mời kết bạn
 @app.route('/add_friend', methods=['POST'])
