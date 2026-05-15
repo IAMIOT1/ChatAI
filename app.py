@@ -21,7 +21,7 @@ from io import BytesIO, StringIO
 import database
 import psycopg2
 from flask import send_from_directory
-
+from database import DatabaseManager  
 # Hàm này sẽ chạy NGAY LẬP TỨC khi app khởi động
 # Trong file app.py
 def force_init_db():
@@ -260,7 +260,7 @@ def index():
         private_rooms = get_private_rooms(user_id)
         
         # Logic đếm bạn bè (Những người đã status = 'accepted')
-        conn = get_db_connection()
+        conn = DatabaseManager.get_db_connection()
         cur = conn.cursor()
         cur.execute("""
             SELECT COUNT(*) FROM friendships 
@@ -320,7 +320,7 @@ def create_group():
         return jsonify({'success': False, 'message': 'Chưa đăng nhập'})
     
     user_id = session['user_id']
-    conn = get_db_connection()
+    conn = DatabaseManager.get_db_connection()
     cursor = conn.cursor()
 
     # Đếm số lượng phòng chat RIÊNG (is_group = FALSE) mà user này tham gia
@@ -374,44 +374,71 @@ def private_room(target_user_id):
 @app.route('/search')
 def search():
     q = request.args.get('q', '').strip()
-    if not q:
+    user_id = session.get('user_id')
+    if not q or not user_id:
         return jsonify([])
-    try:
-        user_id = session.get('user_id')
-        conn = get_db_connection()
-        cur = conn.cursor()
+    
+    conn = DatabaseManager.get_db_connection()
+    cur = conn.cursor()
+    
+    # Truy vấn lấy thông tin user từ bảng users và trạng thái bạn bè
+    query = """
+        SELECT u.userid, u.fullname, u.username, f.status, f.sender_id
+        FROM users u
+        LEFT JOIN friendships f ON (
+            (f.sender_id = %s AND f.receiver_id = u.userid) OR 
+            (f.sender_id = u.userid AND f.receiver_id = %s)
+        )
+        WHERE u.username = %s AND u.userid != %s
+    """
+    cur.execute(query, (user_id, user_id, q, user_id))
+    rows = cur.fetchall()
+    
+    results = []
+    for row in rows:
+        results.append({
+            'userid': row[0],
+            'fullname': row[1],
+            'username': row[2],
+            'friend_status': row[3], # Trạng thái 'accepted', 'pending' hoặc None
+            'is_sender': (row[4] == user_id)
+        })
+    
+    cur.close()
+    conn.close()
+    return jsonify(results)
 
-        # 1. Tìm chính xác theo số điện thoại (username)
-        # Đồng thời kiểm tra trạng thái kết bạn trong bảng friendships
-        query = """
-            SELECT u.userid, u.fullname, u.username, u.is_public, f.status, f.sender_id
-            FROM users u
-            LEFT JOIN friendships f ON (
-                (f.sender_id = %s AND f.receiver_id = u.userid) OR 
-                (f.sender_id = u.userid AND f.receiver_id = %s)
-            )
-            WHERE u.username = %s AND u.userid != %s
-        """
-        cur.execute(query, (user_id, user_id, q, user_id))
-        rows = cur.fetchall()
-        
-        results = []
-        for row in rows:
-            results.append({
-                'userid': row[0],
-                'fullname': row[1],
-                'username': row[2],
-                'is_public': row[3], # Chế độ công khai
-                'friend_status': row[4], # 'pending', 'accepted' hoặc None
-                'is_sender': (row[5] == user_id) # Để biết mình là người gửi hay người nhận
-            })
-            
+# Route gửi lời mời kết bạn
+@app.route('/add_friend', methods=['POST'])
+def add_friend():
+    target_id = request.json.get('target_id')
+    user_id = session.get('user_id')
+    try:
+        conn = DatabaseManager.get_db_connection()
+        cur = conn.cursor()
+        cur.execute("INSERT INTO friendships (sender_id, receiver_id, status) VALUES (%s, %s, 'pending') ON CONFLICT DO NOTHING", (user_id, target_id))
+        conn.commit()
         cur.close()
         conn.close()
-        return jsonify(results)
+        return jsonify({'success': True})
     except Exception as e:
-        app_logger.error(f"Lỗi tìm kiếm: {e}")
-        return jsonify([])
+        return jsonify({'success': False, 'error': str(e)})
+
+# Route chấp nhận lời mời kết bạn
+@app.route('/accept_friend', methods=['POST'])
+def accept_friend():
+    target_id = request.json.get('target_id')
+    user_id = session.get('user_id')
+    try:
+        conn = DatabaseManager.get_db_connection()
+        cur = conn.cursor()
+        cur.execute("UPDATE friendships SET status = 'accepted' WHERE sender_id = %s AND receiver_id = %s", (target_id, user_id))
+        conn.commit()
+        cur.close()
+        conn.close()
+        return jsonify({'success': True})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
 
 @app.route('/send_friend_request', methods=['POST'])
 def send_friend_request():
@@ -423,7 +450,7 @@ def send_friend_request():
     sender_id = session['user_id']
 
     try:
-        conn = get_db_connection()
+        conn = DatabaseManager.get_db_connection()
         cur = conn.cursor()
         # Thêm lời mời mới
         cur.execute("""
