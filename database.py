@@ -216,13 +216,13 @@ class DatabaseManager:
             
             if reply_to_message_id:
                 query = """
-                    INSERT INTO messages (roomid, senderid, content, messagetype, isread, sentat, replytomessageid)
+                    INSERT INTO messages (id, senderid, content, messagetype, isread, sentat, replytomessageid)
                     VALUES (?, ?, ?, ?, 0, GETDATE(), ?)
                 """
                 params = (room_id, user_id, content, msg_type, reply_to_message_id)
             else:
                 query = """
-                    INSERT INTO messages (roomid, senderid, content, messagetype, isread, sentat)
+                    INSERT INTO messages (id, senderid, content, messagetype, isread, sentat)
                     VALUES (?, ?, ?, ?, 0, GETDATE())
                 """
                 params = (room_id, user_id, content, msg_type)
@@ -243,7 +243,7 @@ class DatabaseManager:
                        u.username as sendername, u.id as senderid, m.replytomessageid
                 FROM messages m
                 JOIN users u ON m.senderid = u.id
-                WHERE m.roomid = ? AND m.isdeleted = 0
+                WHERE m.id = ? AND m.isdeleted = 0
                 ORDER BY m.sentat DESC
                 LIMIT {}
             """.format(limit)
@@ -271,7 +271,7 @@ class DatabaseManager:
                     ORDER BY m.sentat DESC
                 """
             elif export_type == 'rooms':
-                query = "SELECT roomid, roomname, isgroup, createdat FROM rooms ORDER BY createdat DESC"
+                query = "SELECT id, roomname, isgroup, createdat FROM rooms ORDER BY createdat DESC"
             elif export_type == 'files':
                 query = """
                     SELECT fileid, filename, filetype, filesize, uploadedat, u.username as uploadername
@@ -295,11 +295,11 @@ class DatabaseManager:
             # Postgres dùng 'CREATE TABLE IF NOT EXISTS', không dùng BEGIN/END/OBJECT_ID
             query = """
                 CREATE TABLE IF NOT EXISTS roomparticipants (
-                    roomid INT NOT NULL,
+                    id INT NOT NULL,
                     id INT NOT NULL,
                     joinedat TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    PRIMARY KEY (roomid, id),
-                    FOREIGN KEY (roomid) REFERENCES rooms(roomid) ON DELETE CASCADE,
+                    PRIMARY KEY (id, id),
+                    FOREIGN KEY (id) REFERENCES rooms(id) ON DELETE CASCADE,
                     FOREIGN KEY (id) REFERENCES users(id) ON DELETE CASCADE
                 )
             """
@@ -529,12 +529,12 @@ class DatabaseManager:
     def get_unread_counts(user_id):
         """Lấy số lượng tin nhắn chưa đọc"""
         try:
-            # Chuyển đổi các cột IsRead, RoomID, SenderID về chữ thường
+            # Chuyển đổi các cột IsRead, id, SenderID về chữ thường
             query = """
-                SELECT roomid, COUNT(*) AS unreadcount
+                SELECT id, COUNT(*) AS unreadcount
                 FROM messages
-                WHERE roomid IS NOT NULL AND isread = 0 AND senderid != ?
-                GROUP BY roomid
+                WHERE id IS NOT NULL AND isread = 0 AND senderid != ?
+                GROUP BY id
             """
             rows = DatabaseManager.execute_query(query, (user_id,), fetch_all=True)
             return {row[0]: row[1] for row in rows} if rows else {}
@@ -582,7 +582,7 @@ class DatabaseManager:
         try:
             # SỬA LỖI: r.isgroup = TRUE thay vì 1
             query = """
-                SELECT r.roomid,
+                SELECT r.id,
                        r.room_name,
                        r.groupavatar,
                        COALESCE(last_msg.content_display, 'Chưa có tin nhắn') AS lastmessage,
@@ -593,16 +593,16 @@ class DatabaseManager:
                     SELECT CASE WHEN messagetype = 'Image' THEN '[Ảnh]' ELSE content END AS content_display,
                            sentat
                     FROM messages m
-                    WHERE m.roomid = r.roomid
+                    WHERE m.id = r.id
                     ORDER BY sentat DESC
                     LIMIT 1
                 ) last_msg ON TRUE
                 LEFT JOIN (
-                    SELECT roomid, COUNT(*) AS unreadcount
+                    SELECT id, COUNT(*) AS unreadcount
                     FROM messages
                     WHERE isread = 0 AND senderid != ?
-                    GROUP BY roomid
-                ) unread ON unread.roomid = r.roomid
+                    GROUP BY id
+                ) unread ON unread.id = r.id
                 WHERE r.isgroup = TRUE
                 ORDER BY last_msg.sentat DESC NULLS LAST
             """
@@ -630,7 +630,7 @@ class DatabaseManager:
         try:
             # SỬA LỖI: r.isgroup = TRUE thay vì 1
             query = """
-                SELECT r.roomid,
+                SELECT r.id,
                        r.room_name,
                        r.groupavatar,
                        COALESCE(last_msg.content_display, 'Chưa có tin nhắn') AS lastmessage,
@@ -641,16 +641,16 @@ class DatabaseManager:
                     SELECT CASE WHEN messagetype = 'Image' THEN '[Ảnh]' ELSE content END AS content_display,
                            sentat
                     FROM messages m
-                    WHERE m.roomid = r.roomid
+                    WHERE m.id = r.id
                     ORDER BY sentat DESC
                     LIMIT 1
                 ) last_msg ON TRUE
                 LEFT JOIN (
-                    SELECT roomid, COUNT(*) AS unreadcount
+                    SELECT id, COUNT(*) AS unreadcount
                     FROM messages
                     WHERE isread = 0 AND senderid != ?
-                    GROUP BY roomid
-                ) unread ON unread.roomid = r.roomid
+                    GROUP BY id
+                ) unread ON unread.id = r.id
                 WHERE r.isgroup = TRUE
                 ORDER BY last_msg.sentat DESC NULLS LAST
             """
@@ -710,7 +710,7 @@ class DatabaseManager:
         try:
             # Sửa lỗi: r.isgroup = FALSE thay vì 0
             query = """
-                SELECT r.roomid,
+                SELECT r.id,
                        r.room_name,
                        u.id AS otherid,
                        u.fullname AS otherusername,
@@ -718,23 +718,23 @@ class DatabaseManager:
                        last_msg.sentat AS lastsentat,
                        COALESCE(unread.unreadcount, 0) AS unreadcount
                 FROM rooms r
-                JOIN roomparticipants rp2 ON rp2.roomid = r.roomid AND rp2.id = ?
-                JOIN roomparticipants rp ON rp.roomid = r.roomid AND rp.id != ?
+                JOIN roomparticipants rp2 ON rp2.id = r.id AND rp2.id = ?
+                JOIN roomparticipants rp ON rp.id = r.id AND rp.id != ?
                 JOIN users u ON u.id = rp.id
                 LEFT JOIN LATERAL (
                     SELECT CASE WHEN messagetype = 'Image' THEN '[Ảnh]' ELSE content END AS content_display,
                            sentat
                     FROM messages m
-                    WHERE m.roomid = r.roomid
+                    WHERE m.id = r.id
                     ORDER BY sentat DESC
                     LIMIT 1
                 ) last_msg ON TRUE
                 LEFT JOIN (
-                    SELECT roomid, COUNT(*) AS unreadcount
+                    SELECT id, COUNT(*) AS unreadcount
                     FROM messages
                     WHERE isread = 0 AND senderid != ?
-                    GROUP BY roomid
-                ) unread ON unread.roomid = r.roomid
+                    GROUP BY id
+                ) unread ON unread.id = r.id
                 WHERE r.isgroup = FALSE
                 ORDER BY last_msg.sentat DESC NULLS LAST
             """
@@ -767,13 +767,13 @@ class DatabaseManager:
         try:
             # 1. Chèn phòng mới và lấy ID ngay lập tức bằng RETURNING
             # IsGroup 1 (BIT) -> TRUE (BOOLEAN)
-            query = "INSERT INTO rooms (roomname, isgroup) VALUES (?, TRUE) RETURNING roomid"
+            query = "INSERT INTO rooms (roomname, isgroup) VALUES (?, TRUE) RETURNING id"
             row = DatabaseManager.execute_query(query, (group_name.strip(),), fetch_one=True)
             room_id = row[0] if row else None
             
             if room_id:
                 # 2. Thêm người tạo vào phòng
-                query = "INSERT INTO roomparticipants (roomid, id) VALUES (?, ?)"
+                query = "INSERT INTO roomparticipants (id, id) VALUES (?, ?)"
                 DatabaseManager.execute_query(query, (room_id, user_id))
             
             return room_id
@@ -798,25 +798,25 @@ class DatabaseManager:
         
         try:
             # 1. Kiểm tra phòng tồn tại (Dùng chữ thường cho bảng/cột)
-            query = "SELECT roomid FROM rooms WHERE isgroup = FALSE AND roomname = ?"
+            query = "SELECT id FROM rooms WHERE isgroup = FALSE AND roomname = ?"
             existing = DatabaseManager.execute_query(query, (room_name,), fetch_one=True)
             
             if existing:
                 room_id = existing[0]
             else:
                 # 2. Tạo phòng mới và lấy ID ngay lập tức bằng RETURNING
-                query = "INSERT INTO rooms (roomname, isgroup) VALUES (?, FALSE) RETURNING roomid"
+                query = "INSERT INTO rooms (roomname, isgroup) VALUES (?, FALSE) RETURNING id"
                 row = DatabaseManager.execute_query(query, (room_name,), fetch_one=True)
                 room_id = int(row[0]) if row and row[0] is not None else None
             
             if room_id is None:
-                raise ValueError('Could not get roomid when creating private room')
+                raise ValueError('Could not get id when creating private room')
             
             # 3. Thêm thành viên (Dùng bảng roomparticipants)
             for participant_id in (user_id, target_user_id):
-                check_query = "SELECT 1 FROM roomparticipants WHERE roomid = ? AND id = ?"
+                check_query = "SELECT 1 FROM roomparticipants WHERE id = ? AND id = ?"
                 if not DatabaseManager.execute_query(check_query, (room_id, participant_id), fetch_one=True):
-                    insert_query = "INSERT INTO roomparticipants (roomid, id) VALUES (?, ?)"
+                    insert_query = "INSERT INTO roomparticipants (id, id) VALUES (?, ?)"
                     DatabaseManager.execute_query(insert_query, (room_id, participant_id))
             
             # 4. Lấy tên người nhận
@@ -850,7 +850,7 @@ class DatabaseManager:
                 """
             elif export_type == 'rooms':
                 query = """
-                    SELECT roomid, roomname, isgroup, createdat
+                    SELECT id, roomname, isgroup, createdat
                     FROM rooms
                     ORDER BY createdat DESC
                 """
@@ -881,7 +881,7 @@ class DatabaseManager:
                        m.sentat, m.isread, m.editedat, m.isdeleted, m.deletedat
                 FROM messages m
                 JOIN users u ON m.senderid = u.id
-                WHERE m.roomid = ? AND (m.isdeleted IS NULL OR m.isdeleted = FALSE)
+                WHERE m.id = ? AND (m.isdeleted IS NULL OR m.isdeleted = FALSE)
                 ORDER BY m.sentat ASC
                 LIMIT ?
             """
@@ -912,7 +912,7 @@ class DatabaseManager:
         """Đánh dấu tin nhắn đã đọc"""
         try:
             # isread = 1 -> isread = TRUE (hoặc vẫn dùng 0/1 nếu execute_query hỗ trợ chuyển đổi)
-            query = "UPDATE messages SET isread = TRUE WHERE roomid = ? AND senderid != ? AND isread = FALSE"
+            query = "UPDATE messages SET isread = TRUE WHERE id = ? AND senderid != ? AND isread = FALSE"
             return DatabaseManager.execute_query(query, (room_id, user_id))
         except Exception as e:
             app_logger.error(f"Mark messages as read error: {e}")
@@ -966,7 +966,7 @@ class DatabaseManager:
             results = []
             
             # Tìm kiếm nhóm: IsGroup = 1 thành TRUE
-            query_sql = "SELECT roomid, roomname FROM rooms WHERE isgroup = TRUE AND roomname LIKE ?"
+            query_sql = "SELECT id, roomname FROM rooms WHERE isgroup = TRUE AND roomname LIKE ?"
             groups = DatabaseManager.execute_query(query_sql, (pattern,), fetch_all=True)
             for group in groups:
                 results.append({'id': group[0], 'type': 'Group', 'name': group[1]})
@@ -1074,9 +1074,9 @@ class DatabaseManager:
                         filesize INT NOT NULL,
                         uploaderid INT NOT NULL,
                         uploadedat TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                        roomid INT NULL,
+                        id INT NULL,
                         CONSTRAINT fk_uploader FOREIGN KEY (uploaderid) REFERENCES users(id),
-                        CONSTRAINT fk_room FOREIGN KEY (roomid) REFERENCES rooms(roomid)
+                        CONSTRAINT fk_room FOREIGN KEY (id) REFERENCES rooms(id)
                     )
                 """
                 DatabaseManager.execute_query(query)
@@ -1093,7 +1093,7 @@ class DatabaseManager:
             # Chuyển tên bảng/cột về chữ thường
             # Đổi UploadedBy thành uploaderid để đồng bộ với hàm ensure_shared_files_table
             query = """
-                INSERT INTO sharedfiles (filename, originalfilename, filepath, filetype, filesize, uploaderid, roomid)
+                INSERT INTO sharedfiles (filename, originalfilename, filepath, filetype, filesize, uploaderid, id)
                 VALUES (?, ?, ?, ?, ?, ?, ?)
             """
             DatabaseManager.execute_query(query, (unique_filename, original_filename, file_url, file_type, file_size, user_id, room_id))
@@ -1211,9 +1211,9 @@ class DatabaseManager:
                 SELECT r.room_name, COUNT(m.messageid) as messagecount,
                        COUNT(DISTINCT m.senderid) as activeusers
                 FROM rooms r
-                LEFT JOIN messages m ON r.roomid = m.roomid
+                LEFT JOIN messages m ON r.id = m.id
                 WHERE m.sentat >= CURRENT_DATE - (? || ' days')::interval
-                GROUP BY r.roomid, r.room_name
+                GROUP BY r.id, r.room_name
                 ORDER BY messagecount DESC
                 LIMIT 10
             """
@@ -1495,7 +1495,7 @@ class DatabaseManager:
         try:
             # Ưu tiên kiểm tra trong bảng roomroles (Bảng phân quyền mới)
             DatabaseManager.ensure_room_roles_table()
-            rr_query = "SELECT role FROM roomroles WHERE roomid = ? AND id = ?"
+            rr_query = "SELECT role FROM roomroles WHERE id = ? AND id = ?"
             rr = DatabaseManager.execute_query(rr_query, (room_id, user_id), fetch_one=True)
             if rr and rr[0] == 'Admin':
                 return True
@@ -1504,7 +1504,7 @@ class DatabaseManager:
             query = """
                 SELECT COUNT(*) 
                 FROM roomparticipants 
-                WHERE roomid = ? AND id = ? AND role = 'Admin'
+                WHERE id = ? AND id = ? AND role = 'Admin'
             """
             result = DatabaseManager.execute_query(query, (room_id, user_id), fetch_one=True)
             return result[0] > 0 if result else False
@@ -1588,7 +1588,7 @@ class DatabaseManager:
             DatabaseManager.ensure_room_roles_table()
             
             # Kiểm tra trong bảng roomroles (Cấu trúc mới)
-            rr_query = "SELECT role FROM roomroles WHERE roomid = ? AND id = ?"
+            rr_query = "SELECT role FROM roomroles WHERE id = ? AND id = ?"
             rr = DatabaseManager.execute_query(rr_query, (room_id, user_id), fetch_one=True)
             if rr and rr[0] == 'Admin':
                 return True
@@ -1597,7 +1597,7 @@ class DatabaseManager:
             query = """
                 SELECT COUNT(*) 
                 FROM roomparticipants 
-                WHERE roomid = ? AND id = ? AND role = 'Admin'
+                WHERE id = ? AND id = ? AND role = 'Admin'
             """
             result = DatabaseManager.execute_query(query, (room_id, user_id), fetch_one=True)
             return result[0] > 0 if result else False
@@ -1624,7 +1624,7 @@ class DatabaseManager:
             # GETDATE() của SQL Server được thay bằng CURRENT_TIMESTAMP trong Postgres
             # IsRead là kiểu BOOLEAN nên dùng FALSE thay vì 0
             query = """
-                INSERT INTO messages (senderid, content, messagetype, roomid, replytomessageid, sentat, isread)
+                INSERT INTO messages (senderid, content, messagetype, id, replytomessageid, sentat, isread)
                 VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, FALSE)
             """
             DatabaseManager.execute_query(query, (user_id, content, msg_type, room_id, reply_to_message_id))
@@ -1659,7 +1659,7 @@ class DatabaseManager:
             
             # Chèn tin nhắn mới với tham chiếu đến ID tin nhắn gốc
             query = """
-                INSERT INTO messages (senderid, content, messagetype, roomid, forwardedfrommessageid, sentat, isread)
+                INSERT INTO messages (senderid, content, messagetype, id, forwardedfrommessageid, sentat, isread)
                 VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, FALSE)
             """
             DatabaseManager.execute_query(query, (user_id, content, msg_type, target_room_id, original_message_id))
@@ -1686,7 +1686,7 @@ class DatabaseManager:
             # GETDATE() của SQL Server được thay bằng CURRENT_TIMESTAMP trong Postgres
             # IsRead là kiểu BOOLEAN nên dùng FALSE thay vì 0
             query = """
-                INSERT INTO messages (senderid, content, messagetype, roomid, replytomessageid, sentat, isread)
+                INSERT INTO messages (senderid, content, messagetype, id, replytomessageid, sentat, isread)
                 VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, FALSE)
             """
             DatabaseManager.execute_query(query, (user_id, content, msg_type, room_id, reply_to_message_id))
@@ -1721,7 +1721,7 @@ class DatabaseManager:
             
             # Chèn tin nhắn mới với tham chiếu đến ID tin nhắn gốc
             query = """
-                INSERT INTO messages (senderid, content, messagetype, roomid, forwardedfrommessageid, sentat, isread)
+                INSERT INTO messages (senderid, content, messagetype, id, forwardedfrommessageid, sentat, isread)
                 VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, FALSE)
             """
             DatabaseManager.execute_query(query, (user_id, content, msg_type, target_room_id, original_message_id))
@@ -1772,7 +1772,7 @@ class DatabaseManager:
                 SELECT u.id, u.email, u.fullname
                 FROM users u
                 JOIN roomparticipants rp ON u.id = rp.id
-                WHERE rp.roomid = ? 
+                WHERE rp.id = ? 
                 AND u.email IS NOT NULL 
                 AND u.email != ''
                 AND u.emailnotificationenabled = TRUE
@@ -1794,7 +1794,7 @@ class DatabaseManager:
             # Chuyển tên bảng/cột về chữ thường
             query = """
                 DELETE FROM roomparticipants
-                WHERE roomid = ? AND id = ?
+                WHERE id = ? AND id = ?
             """
             DatabaseManager.execute_query(query, (room_id, user_id))
             return True
@@ -1816,7 +1816,7 @@ class DatabaseManager:
             query = """
                 UPDATE rooms
                 SET roomname = ?, description = ?
-                WHERE roomid = ?
+                WHERE id = ?
             """
             DatabaseManager.execute_query(query, (room_name, description, room_id))
             return True
@@ -1835,12 +1835,12 @@ class DatabaseManager:
                 query = """
                     CREATE TABLE groupinvites (
                         inviteid SERIAL PRIMARY KEY,
-                        roomid INT NOT NULL,
+                        id INT NOT NULL,
                         inviterid INT NOT NULL,
                         inviteeid INT NOT NULL,
                         status VARCHAR(50) DEFAULT 'Pending',
                         createdat TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                        CONSTRAINT fk_room FOREIGN KEY (roomid) REFERENCES rooms(roomid),
+                        CONSTRAINT fk_room FOREIGN KEY (id) REFERENCES rooms(id),
                         CONSTRAINT fk_inviter FOREIGN KEY (inviterid) REFERENCES users(id),
                         CONSTRAINT fk_invitee FOREIGN KEY (inviteeid) REFERENCES users(id)
                     )
@@ -1850,7 +1850,7 @@ class DatabaseManager:
             # Kiểm tra xem lời mời đang chờ (Pending) đã tồn tại chưa
             check_query = """
                 SELECT inviteid FROM groupinvites 
-                WHERE roomid = ? AND inviteeid = ? AND status = 'Pending'
+                WHERE id = ? AND inviteeid = ? AND status = 'Pending'
             """
             existing = DatabaseManager.execute_query(check_query, (room_id, invitee_id), fetch_one=True)
             if existing:
@@ -1858,7 +1858,7 @@ class DatabaseManager:
             
             # Tạo lời mời mới
             query = """
-                INSERT INTO groupinvites (roomid, inviterid, inviteeid, status, createdat)
+                INSERT INTO groupinvites (id, inviterid, inviteeid, status, createdat)
                 VALUES (?, ?, ?, 'Pending', CURRENT_TIMESTAMP)
             """
             DatabaseManager.execute_query(query, (room_id, inviter_id, invitee_id))
@@ -1873,10 +1873,10 @@ class DatabaseManager:
         try:
             # Chuyển tên bảng/cột về chữ thường
             query = """
-                SELECT gi.inviteid, gi.roomid, gi.inviterid, gi.createdat,
+                SELECT gi.inviteid, gi.id, gi.inviterid, gi.createdat,
                        r.room_name, r.avatarurl, u.fullname as invitername
                 FROM groupinvites gi
-                JOIN rooms r ON gi.roomid = r.roomid
+                JOIN rooms r ON gi.id = r.id
                 JOIN users u ON gi.inviterid = u.id
                 WHERE gi.inviteeid = ? AND gi.status = 'Pending'
                 ORDER BY gi.createdat DESC
@@ -1901,7 +1901,7 @@ class DatabaseManager:
         try:
             # Lấy thông tin lời mời
             query = """
-                SELECT roomid, inviteeid FROM groupinvites 
+                SELECT id, inviteeid FROM groupinvites 
                 WHERE inviteid = ? AND inviteeid = ? AND status = 'Pending'
             """
             invite = DatabaseManager.execute_query(query, (invite_id, user_id), fetch_one=True)
@@ -1935,7 +1935,7 @@ class DatabaseManager:
             query = """
                 SELECT COUNT(*) 
                 FROM roomparticipants 
-                WHERE roomid = ? AND id = ?
+                WHERE id = ? AND id = ?
             """
             result = DatabaseManager.execute_query(query, (room_id, user_id), fetch_one=True)
             return result[0] > 0 if result else False
@@ -1952,12 +1952,12 @@ class DatabaseManager:
             # PostgreSQL dùng cú pháp CREATE TABLE IF NOT EXISTS đơn giản hơn
             query = """
                 CREATE TABLE IF NOT EXISTS roomparticipants (
-                    roomid INT NOT NULL,
+                    id INT NOT NULL,
                     id INT NOT NULL,
                     joinedat TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     role VARCHAR(50) DEFAULT 'Member',
-                    PRIMARY KEY (roomid, id),
-                    CONSTRAINT fk_room FOREIGN KEY (roomid) REFERENCES rooms(roomid),
+                    PRIMARY KEY (id, id),
+                    CONSTRAINT fk_room FOREIGN KEY (id) REFERENCES rooms(id),
                     CONSTRAINT fk_user FOREIGN KEY (id) REFERENCES users(id)
                 )
             """
@@ -1974,7 +1974,7 @@ class DatabaseManager:
                 SELECT u.id, u.fullname, u.username, rp.role, rp.joinedat, u.status
                 FROM roomparticipants rp
                 JOIN users u ON rp.id = u.id
-                WHERE rp.roomid = ?
+                WHERE rp.id = ?
                 ORDER BY CASE WHEN rp.role = 'Admin' THEN 1 ELSE 2 END, u.fullname
             """
             members = DatabaseManager.execute_query(query, (room_id,), fetch_all=True)
@@ -2003,7 +2003,7 @@ class DatabaseManager:
                        m.messagetype, m.sentat, m.editedat, m.isdeleted
                 FROM messages m
                 JOIN users u ON m.senderid = u.id
-                WHERE m.roomid = ? AND (m.isdeleted IS FALSE OR m.isdeleted IS NULL)
+                WHERE m.id = ? AND (m.isdeleted IS FALSE OR m.isdeleted IS NULL)
                   AND (m.content ILIKE ? OR u.fullname ILIKE ?)
                 ORDER BY m.sentat DESC
                 LIMIT ? OFFSET ?
@@ -2019,7 +2019,7 @@ class DatabaseManager:
                 SELECT COUNT(*)
                 FROM messages m
                 JOIN users u ON m.senderid = u.id
-                WHERE m.roomid = ? AND (m.isdeleted IS FALSE OR m.isdeleted IS NULL)
+                WHERE m.id = ? AND (m.isdeleted IS FALSE OR m.isdeleted IS NULL)
                   AND (m.content ILIKE ? OR u.fullname ILIKE ?)
             """
             total_result = DatabaseManager.execute_query(
@@ -2059,12 +2059,12 @@ class DatabaseManager:
             # Sử dụng ILIKE để tìm kiếm tiếng Việt có dấu/không dấu linh hoạt hơn
             search_query = """
                 SELECT DISTINCT m.messageid, m.senderid, u.fullname as sendername, m.content,
-                       m.messagetype, m.sentat, m.roomid, r.room_name,
+                       m.messagetype, m.sentat, m.id, r.room_name,
                        CASE WHEN r.isgroup IS TRUE THEN r.room_name ELSE 'Chat riêng' END as roomdisplayname
                 FROM messages m
                 JOIN users u ON m.senderid = u.id
-                JOIN rooms r ON m.roomid = r.roomid
-                JOIN roomparticipants rp ON r.roomid = rp.roomid AND rp.id = ?
+                JOIN rooms r ON m.id = r.id
+                JOIN roomparticipants rp ON r.id = rp.id AND rp.id = ?
                 WHERE (m.isdeleted IS FALSE OR m.isdeleted IS NULL)
                   AND (m.content ILIKE ? OR u.fullname ILIKE ? OR r.room_name ILIKE ?)
                 ORDER BY m.sentat DESC
@@ -2081,8 +2081,8 @@ class DatabaseManager:
                 SELECT COUNT(DISTINCT m.messageid)
                 FROM messages m
                 JOIN users u ON m.senderid = u.id
-                JOIN rooms r ON m.roomid = r.roomid
-                JOIN roomparticipants rp ON r.roomid = rp.roomid AND rp.id = ?
+                JOIN rooms r ON m.id = r.id
+                JOIN roomparticipants rp ON r.id = rp.id AND rp.id = ?
                 WHERE (m.isdeleted IS FALSE OR m.isdeleted IS NULL)
                   AND (m.content ILIKE ? OR u.fullname ILIKE ? OR r.room_name ILIKE ?)
             """
@@ -2126,7 +2126,7 @@ class DatabaseManager:
                 UNION ALL
                 SELECT DISTINCT 'room' as type, r.room_name as name, '' as username
                 FROM rooms r
-                JOIN roomparticipants rp ON r.roomid = rp.roomid AND rp.id = ?
+                JOIN roomparticipants rp ON r.id = rp.id AND rp.id = ?
                 WHERE r.room_name ILIKE ?
                 ORDER BY name
                 LIMIT 10
@@ -2159,7 +2159,7 @@ class DatabaseManager:
             query = """
                 UPDATE rooms
                 SET roomname = ?, description = ?
-                WHERE roomid = ?
+                WHERE id = ?
             """
             DatabaseManager.execute_query(query, (room_name, description, room_id))
             return True
@@ -2175,7 +2175,7 @@ class DatabaseManager:
             query = """
                 SELECT COUNT(*) 
                 FROM roomparticipants 
-                WHERE roomid = ? AND id = ?
+                WHERE id = ? AND id = ?
             """
             result = DatabaseManager.execute_query(query, (room_id, user_id), fetch_one=True)
             return result[0] > 0 if result else False
@@ -2191,7 +2191,7 @@ class DatabaseManager:
                 SELECT u.id, u.fullname, u.username, rp.role, rp.joinedat, u.status
                 FROM roomparticipants rp
                 JOIN users u ON rp.id = u.id
-                WHERE rp.roomid = ?
+                WHERE rp.id = ?
                 ORDER BY CASE WHEN rp.role = 'Admin' THEN 1 ELSE 2 END, u.fullname
             """
             members = DatabaseManager.execute_query(query, (room_id,), fetch_all=True)
@@ -2220,7 +2220,7 @@ class DatabaseManager:
             query = """
                 UPDATE rooms
                 SET roomname = ?, description = ?
-                WHERE roomid = ?
+                WHERE id = ?
             """
             DatabaseManager.execute_query(query, (room_name, description, room_id))
             return True
@@ -2236,7 +2236,7 @@ class DatabaseManager:
             query = """
                 SELECT COUNT(*) 
                 FROM roomparticipants 
-                WHERE roomid = ? AND id = ?
+                WHERE id = ? AND id = ?
             """
             result = DatabaseManager.execute_query(query, (room_id, user_id), fetch_one=True)
             return result[0] > 0 if result else False
@@ -2252,7 +2252,7 @@ class DatabaseManager:
                 SELECT u.id, u.fullname, u.username, rp.role, rp.joinedat, u.status
                 FROM roomparticipants rp
                 JOIN users u ON rp.id = u.id
-                WHERE rp.roomid = ?
+                WHERE rp.id = ?
                 ORDER BY CASE WHEN rp.role = 'Admin' THEN 1 ELSE 2 END, u.fullname
             """
             members = DatabaseManager.execute_query(query, (room_id,), fetch_all=True)
@@ -2282,7 +2282,7 @@ class DatabaseManager:
                        m.messagetype, m.sentat, m.editedat, m.isdeleted
                 FROM messages m
                 JOIN users u ON m.senderid = u.id
-                WHERE m.roomid = ? AND (m.isdeleted IS FALSE OR m.isdeleted IS NULL)
+                WHERE m.id = ? AND (m.isdeleted IS FALSE OR m.isdeleted IS NULL)
                   AND (m.content ILIKE ? OR u.fullname ILIKE ?)
                 ORDER BY m.sentat DESC
                 LIMIT ? OFFSET ?
@@ -2298,7 +2298,7 @@ class DatabaseManager:
                 SELECT COUNT(*)
                 FROM messages m
                 JOIN users u ON m.senderid = u.id
-                WHERE m.roomid = ? AND (m.isdeleted IS FALSE OR m.isdeleted IS NULL)
+                WHERE m.id = ? AND (m.isdeleted IS FALSE OR m.isdeleted IS NULL)
                   AND (m.content ILIKE ? OR u.fullname ILIKE ?)
             """
             total_result = DatabaseManager.execute_query(
@@ -2337,12 +2337,12 @@ class DatabaseManager:
             # Logic xử lý: Chỉ tìm trong các phòng mà user_id là thành viên (RoomParticipants)
             search_query = """
                 SELECT DISTINCT m.messageid, m.senderid, u.fullname as sendername, m.content,
-                       m.messagetype, m.sentat, m.roomid, r.room_name,
+                       m.messagetype, m.sentat, m.id, r.room_name,
                        CASE WHEN r.isgroup IS TRUE THEN r.room_name ELSE 'Chat riêng' END as roomdisplayname
                 FROM messages m
                 JOIN users u ON m.senderid = u.id
-                JOIN rooms r ON m.roomid = r.roomid
-                JOIN roomparticipants rp ON r.roomid = rp.roomid AND rp.id = ?
+                JOIN rooms r ON m.id = r.id
+                JOIN roomparticipants rp ON r.id = rp.id AND rp.id = ?
                 WHERE (m.isdeleted IS FALSE OR m.isdeleted IS NULL)
                   AND (m.content ILIKE ? OR u.fullname ILIKE ? OR r.room_name ILIKE ?)
                 ORDER BY m.sentat DESC
@@ -2359,8 +2359,8 @@ class DatabaseManager:
                 SELECT COUNT(DISTINCT m.messageid)
                 FROM messages m
                 JOIN users u ON m.senderid = u.id
-                JOIN rooms r ON m.roomid = r.roomid
-                JOIN roomparticipants rp ON r.roomid = rp.roomid AND rp.id = ?
+                JOIN rooms r ON m.id = r.id
+                JOIN roomparticipants rp ON r.id = rp.id AND rp.id = ?
                 WHERE (m.isdeleted IS FALSE OR m.isdeleted IS NULL)
                   AND (m.content ILIKE ? OR u.fullname ILIKE ? OR r.room_name ILIKE ?)
             """
@@ -2404,7 +2404,7 @@ class DatabaseManager:
                 UNION ALL
                 SELECT DISTINCT 'room' as type, r.room_name as name, '' as username
                 FROM rooms r
-                JOIN roomparticipants rp ON r.roomid = rp.roomid AND rp.id = ?
+                JOIN roomparticipants rp ON r.id = rp.id AND rp.id = ?
                 WHERE r.room_name ILIKE ?
                 ORDER BY name
                 LIMIT 10
@@ -2534,9 +2534,9 @@ class DatabaseManager:
             top_rooms_query = """
                 SELECT r.room_name, COUNT(m.messageid) as MessageCount
                 FROM rooms r
-                LEFT JOIN messages m ON r.roomid = m.roomid
+                LEFT JOIN messages m ON r.id = m.id
                 WHERE m.sentat >= CURRENT_DATE - INTERVAL '30 days'
-                GROUP BY r.roomid, r.room_name
+                GROUP BY r.id, r.room_name
                 ORDER BY MessageCount DESC
                 LIMIT 10
             """
@@ -2657,10 +2657,10 @@ class DatabaseManager:
                         duration INT NULL,
                         filesize INT NOT NULL,
                         uploadedby INT NOT NULL,
-                        roomid INT NULL,
+                        id INT NULL,
                         createdat TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                         FOREIGN KEY (uploadedby) REFERENCES users(id),
-                        FOREIGN KEY (roomid) REFERENCES rooms(roomid)
+                        FOREIGN KEY (id) REFERENCES rooms(id)
                     )
                 """
                 DatabaseManager.execute_query(create_table_query)
@@ -2673,7 +2673,7 @@ class DatabaseManager:
         try:
             DatabaseManager.ensure_voice_messages_table()
             query = """
-                INSERT INTO voicemessages (filename, filepath, filesize, uploadedby, roomid, duration)
+                INSERT INTO voicemessages (filename, filepath, filesize, uploadedby, id, duration)
                 VALUES (?, ?, ?, ?, ?, ?)
             """
             DatabaseManager.execute_query(query, (filename, filepath, filesize, uploaded_by, room_id, duration))
@@ -2695,7 +2695,7 @@ class DatabaseManager:
                        vm.filesize, vm.createdat, u.fullname as sendername
                 FROM voicemessages vm
                 JOIN users u ON vm.uploadedby = u.id
-                WHERE vm.roomid = ?
+                WHERE vm.id = ?
                 ORDER BY vm.createdat DESC
             """
             voice_messages = DatabaseManager.execute_query(query, (room_id,), fetch_all=True)
@@ -2949,7 +2949,7 @@ class DatabaseManager:
             DatabaseManager.ensure_pinned_column()
             
             # Kiểm tra quyền hạn: Chỉ người gửi hoặc Admin mới được ghim
-            query = "SELECT senderid, roomid FROM messages WHERE messageid = ?"
+            query = "SELECT senderid, id FROM messages WHERE messageid = ?"
             result = DatabaseManager.execute_query(query, (message_id,), fetch_one=True)
             if not result:
                 return False
@@ -2993,7 +2993,7 @@ class DatabaseManager:
                        u.username as sendername, u.id as senderid
                 FROM messages m
                 JOIN users u ON m.senderid = u.id
-                WHERE m.roomid = ? AND m.ispinned = TRUE AND m.isdeleted = FALSE
+                WHERE m.id = ? AND m.ispinned = TRUE AND m.isdeleted = FALSE
                 ORDER BY m.sentat DESC
             """
             messages = DatabaseManager.execute_query(query, (room_id,), fetch_all=True)
@@ -3059,7 +3059,7 @@ class DatabaseManager:
                 SELECT DISTINCT u.id, u.username
                 FROM users u
                 JOIN roomparticipants rp ON u.id = rp.id
-                WHERE rp.roomid = ? AND u.username IN ({placeholders})
+                WHERE rp.id = ? AND u.username IN ({placeholders})
             """
             
             params = [room_id] + mentions
@@ -3083,7 +3083,7 @@ class DatabaseManager:
             # Sử dụng JOIN để lấy nội dung tin nhắn và tên người đã nhắc mình
             query = """
                 SELECT m.mentionid, m.messageid, m.mentioningid, m.createdat, m.isread,
-                       msg.content, msg.roomid, u.username as mentioningusername
+                       msg.content, msg.id, u.username as mentioningusername
                 FROM mentions m
                 JOIN messages msg ON m.messageid = msg.messageid
                 JOIN users u ON m.mentioningid = u.id
@@ -3126,7 +3126,7 @@ class DatabaseManager:
         """Cập nhật ảnh đại diện cho phòng chat"""
         try:
             DatabaseManager.ensure_group_avatar_column()
-            query = "UPDATE rooms SET groupavatar = ? WHERE roomid = ?"
+            query = "UPDATE rooms SET groupavatar = ? WHERE id = ?"
             DatabaseManager.execute_query(query, (avatar_url, room_id))
             return True
         except Exception as e:
@@ -3138,7 +3138,7 @@ class DatabaseManager:
         """Lấy link ảnh đại diện của phòng chat"""
         try:
             DatabaseManager.ensure_group_avatar_column()
-            query = "SELECT groupavatar FROM rooms WHERE roomid = ?"
+            query = "SELECT groupavatar FROM rooms WHERE id = ?"
             result = DatabaseManager.execute_query(query, (room_id,), fetch_one=True)
             return result[0] if result and result[0] else None
         except Exception as e:
@@ -3149,17 +3149,17 @@ class DatabaseManager:
     def ensure_muted_rooms_table():
         """Đảm bảo bảng mutedrooms tồn tại trong Postgres"""
         try:
-            if not DatabaseManager.column_exists('mutedrooms', 'mutedroomid'):
+            if not DatabaseManager.column_exists('mutedrooms', 'mutedid'):
                 # SERIAL thay IDENTITY, TIMESTAMP thay DATETIME
                 query = """
                     CREATE TABLE mutedrooms (
-                        mutedroomid SERIAL PRIMARY KEY,
+                        mutedid SERIAL PRIMARY KEY,
                         id INT NOT NULL,
-                        roomid INT NOT NULL,
+                        id INT NOT NULL,
                         mutedat TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                         FOREIGN KEY (id) REFERENCES users(id),
-                        FOREIGN KEY (roomid) REFERENCES rooms(roomid),
-                        UNIQUE(id, roomid)
+                        FOREIGN KEY (id) REFERENCES rooms(id),
+                        UNIQUE(id, id)
                     )
                 """
                 DatabaseManager.execute_query(query)
@@ -3174,11 +3174,11 @@ class DatabaseManager:
             DatabaseManager.ensure_muted_rooms_table()
             # Kiểm tra xem đã tắt thông báo chưa
             # Postgres sử dụng tên bảng/cột viết thường để tránh lỗi phân biệt hoa thường
-            check_query = "SELECT 1 FROM mutedrooms WHERE id = ? AND roomid = ?"
+            check_query = "SELECT 1 FROM mutedrooms WHERE id = ? AND id = ?"
             exists = DatabaseManager.execute_query(check_query, (user_id, room_id), fetch_one=True)
             
             if not exists:
-                insert_query = "INSERT INTO mutedrooms (id, roomid) VALUES (?, ?)"
+                insert_query = "INSERT INTO mutedrooms (id, id) VALUES (?, ?)"
                 DatabaseManager.execute_query(insert_query, (user_id, room_id))
             return True
         except Exception as e:
@@ -3190,7 +3190,7 @@ class DatabaseManager:
         """Bật lại thông báo cho một phòng chat"""
         try:
             DatabaseManager.ensure_muted_rooms_table()
-            query = "DELETE FROM mutedrooms WHERE id = ? AND roomid = ?"
+            query = "DELETE FROM mutedrooms WHERE id = ? AND id = ?"
             DatabaseManager.execute_query(query, (user_id, room_id))
             return True
         except Exception as e:
@@ -3202,7 +3202,7 @@ class DatabaseManager:
         """Kiểm tra trạng thái tắt thông báo của một phòng"""
         try:
             DatabaseManager.ensure_muted_rooms_table()
-            query = "SELECT 1 FROM mutedrooms WHERE id = ? AND roomid = ?"
+            query = "SELECT 1 FROM mutedrooms WHERE id = ? AND id = ?"
             result = DatabaseManager.execute_query(query, (user_id, room_id), fetch_one=True)
             return result is not None
         except Exception as e:
@@ -3214,7 +3214,7 @@ class DatabaseManager:
         """Lấy danh sách ID của tất cả các phòng đã tắt thông báo"""
         try:
             DatabaseManager.ensure_muted_rooms_table()
-            query = "SELECT roomid FROM mutedrooms WHERE id = ?"
+            query = "SELECT id FROM mutedrooms WHERE id = ?"
             results = DatabaseManager.execute_query(query, (user_id,), fetch_all=True)
             # Trả về list ID đơn giản để dễ dàng xử lý ở Front-end
             return [r[0] for r in results]
@@ -3231,13 +3231,13 @@ class DatabaseManager:
                 query = """
                     CREATE TABLE roomroles (
                         roleid SERIAL PRIMARY KEY,
-                        roomid INT NOT NULL,
+                        id INT NOT NULL,
                         id INT NOT NULL,
                         role VARCHAR(50) DEFAULT 'Member',
                         assignedat TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                        FOREIGN KEY (roomid) REFERENCES rooms(roomid),
+                        FOREIGN KEY (id) REFERENCES rooms(id),
                         FOREIGN KEY (id) REFERENCES users(id),
-                        UNIQUE(roomid, id)
+                        UNIQUE(id, id)
                     )
                 """
                 DatabaseManager.execute_query(query)
@@ -3257,20 +3257,20 @@ class DatabaseManager:
                 role = 'Member'
                 
             # Kiểm tra xem người dùng đã có quyền trong phòng này chưa
-            check_query = "SELECT 1 FROM roomroles WHERE roomid = ? AND id = ?"
+            check_query = "SELECT 1 FROM roomroles WHERE id = ? AND id = ?"
             exists = DatabaseManager.execute_query(check_query, (room_id, user_id), fetch_one=True)
             
             if exists:
-                update_query = "UPDATE roomroles SET role = ? WHERE roomid = ? AND id = ?"
+                update_query = "UPDATE roomroles SET role = ? WHERE id = ? AND id = ?"
                 DatabaseManager.execute_query(update_query, (role, room_id, user_id))
             else:
-                insert_query = "INSERT INTO roomroles (roomid, id, role) VALUES (?, ?, ?)"
+                insert_query = "INSERT INTO roomroles (id, id, role) VALUES (?, ?, ?)"
                 DatabaseManager.execute_query(insert_query, (room_id, user_id, role))
 
             # Đồng bộ với bảng roomparticipants để đảm bảo tính tương thích
             try:
                 if DatabaseManager.column_exists('roomparticipants', 'role'):
-                    sync_query = "UPDATE roomparticipants SET role = ? WHERE roomid = ? AND id = ?"
+                    sync_query = "UPDATE roomparticipants SET role = ? WHERE id = ? AND id = ?"
                     DatabaseManager.execute_query(sync_query, (role, room_id, user_id))
             except Exception as e:
                 app_logger.warning(f"Sync RoomParticipants.role failed: {e}")
@@ -3285,7 +3285,7 @@ class DatabaseManager:
         """Lấy quyền hiện tại của người dùng trong phòng"""
         try:
             DatabaseManager.ensure_room_roles_table()
-            query = "SELECT role FROM roomroles WHERE roomid = ? AND id = ?"
+            query = "SELECT role FROM roomroles WHERE id = ? AND id = ?"
             result = DatabaseManager.execute_query(query, (room_id, user_id), fetch_one=True)
             # Mặc định là Member nếu không tìm thấy dữ liệu
             return result[0] if result else 'Member'
@@ -3304,8 +3304,8 @@ class DatabaseManager:
                 SELECT u.id, u.fullname, u.username, u.status, rr.role
                 FROM users u
                 JOIN roomparticipants rp ON u.id = rp.id
-                LEFT JOIN roomroles rr ON u.id = rr.id AND rp.roomid = rr.roomid
-                WHERE rp.roomid = ?
+                LEFT JOIN roomroles rr ON u.id = rr.id AND rp.id = rr.id
+                WHERE rp.id = ?
             """
             results = DatabaseManager.execute_query(query, (room_id,), fetch_all=True)
             
@@ -3328,7 +3328,7 @@ class DatabaseManager:
             DatabaseManager.ensure_room_roles_table()
             # Trong Postgres, chỉ cần xóa dòng tương ứng trong roomroles, 
             # logic get_room_members_with_roles sẽ tự hiểu là 'Member'.
-            query = "DELETE FROM roomroles WHERE roomid = ? AND id = ?"
+            query = "DELETE FROM roomroles WHERE id = ? AND id = ?"
             DatabaseManager.execute_query(query, (room_id, user_id))
             return True
         except Exception as e:

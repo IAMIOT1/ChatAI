@@ -2232,10 +2232,10 @@
                 });
         }
 
-        var currentInviteRoomId = null;
+        var currentInviteid = null;
 
-        function openGroupInviteModal(roomId) {
-            currentInviteRoomId = roomId;
+        function openGroupInviteModal(id) {
+            currentInviteid = id;
 
             // Load users not in the room
             var userSelect = document.getElementById('invite-user-select');
@@ -2257,7 +2257,7 @@
 
         function closeGroupInviteModal() {
             document.getElementById('group-invite-modal').style.display = 'none';
-            currentInviteRoomId = null;
+            currentInviteid = null;
         }
 
         function sendGroupInvite() {
@@ -2268,7 +2268,7 @@
                 return;
             }
 
-            if (!currentInviteRoomId) {
+            if (!currentInviteid) {
                 alert('Lỗi: Không có phòng để mời');
                 return;
             }
@@ -2277,7 +2277,7 @@
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
-                    room_id: currentInviteRoomId,
+                    room_id: currentInviteid,
                     invitee_id: inviteeId
                 })
             })
@@ -2414,9 +2414,9 @@
         }
 
         function submitForward() {
-            var targetRoomId = document.getElementById('forward-room-select').value;
+            var targetid = document.getElementById('forward-room-select').value;
 
-            if (!targetRoomId) {
+            if (!targetid) {
                 alert('Vui lòng chọn phòng để forward');
                 return;
             }
@@ -2431,7 +2431,7 @@
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     message_id: currentForwardMessageId,
-                    target_room_id: targetRoomId
+                    target_room_id: targetid
                 })
             })
                 .then(function (response) { return response.json(); })
@@ -2581,8 +2581,8 @@
             loadTheme();
             var msgBox = document.getElementById('messages');
             msgBox.scrollTop = msgBox.scrollHeight;
-            userRooms.forEach(function (roomId) {
-                socket.emit('join', { room: roomId, user: current_user });
+            userRooms.forEach(function (id) {
+                socket.emit('join', { room: id, user: current_user });
             });
             socket.emit('join_user_room');
             // Show upload avatar button in header if the initial room is a group
@@ -2724,8 +2724,8 @@
             // Tạm thời chưa dùng trực tiếp nếu không gọi API private_room
         }
 
-        function loadRoomHistory(roomId) {
-            fetch('/history/' + roomId)
+        function loadRoomHistory(id) {
+            fetch('/history/' + id)
                 .then(function (response) { return response.json(); })
                 .then(function (messages) {
                     var messagesContainer = document.getElementById('messages');
@@ -2733,21 +2733,21 @@
                     messages.forEach(function (msg) {
                         appendMessage({ user: msg.sender, content: msg.content, type: msg.type, is_read: msg.is_read, sent_at: msg.sent_at });
                     });
-                    markRead(roomId);
+                    markRead(id);
                 });
         }
 
-        function markRead(roomId) {
-            fetch('/mark_read/' + roomId, { method: 'POST' });
-            var badge = document.getElementById('room-badge-' + roomId);
+        function markRead(id) {
+            fetch('/mark_read/' + id, { method: 'POST' });
+            var badge = document.getElementById('room-badge-' + id);
             if (badge) {
                 badge.style.display = 'none';
                 badge.innerText = '0';
             }
         }
 
-        function updateRoomBadge(roomId) {
-            var badge = document.getElementById('room-badge-' + roomId);
+        function updateRoomBadge(id) {
+            var badge = document.getElementById('room-badge-' + id);
             if (!badge) return;
             var count = parseInt(badge.innerText) || 0;
             count += 1;
@@ -2755,16 +2755,16 @@
             badge.style.display = 'inline-block';
         }
 
-        function updateRoomPreview(roomId, text) {
-            var preview = document.getElementById('room-preview-' + roomId);
+        function updateRoomPreview(id, text) {
+            var preview = document.getElementById('room-preview-' + id);
             if (!preview) return;
             preview.innerText = text;
         }
 
-        function updateRoomTime(roomId, time) {
-            var item = document.getElementById('room-item-' + roomId);
+        function updateRoomTime(id, time) {
+            var item = document.getElementById('room-item-' + id);
             if (!item) return;
-            var badge = document.getElementById('room-badge-' + roomId);
+            var badge = document.getElementById('room-badge-' + id);
             var timeEl = item.querySelector('span[style*="font-size:11px"]');
             if (timeEl) {
                 timeEl.innerText = time || timeEl.innerText;
@@ -2871,9 +2871,9 @@
 
         // Hàm xử lý select room từ data attributes
         function selectRoomFromData(element) {
-            var roomId = element.getAttribute('data-room-id');
+            var id = element.getAttribute('data-room-id');
             var roomName = element.getAttribute('data-room-name');
-            selectRoom(roomId, roomName);
+            selectRoom(id, roomName);
         }
 
         // Hàm xử lý fetch private room từ data attributes  
@@ -2883,27 +2883,27 @@
             fetchPrivateRoom(id, userName);
         }
 
-        function selectRoom(roomId, roomName) {
-            current_room = roomId;
-            socket.emit('join', { room: roomId, user: current_user });
+        function selectRoom(id, roomName) {
+            current_room = id;
+            socket.emit('join', { room: id, user: current_user });
 
             // Cập nhật UI
             document.querySelectorAll('.user-item').forEach(function (item) {
                 item.classList.remove('active');
             });
-            document.getElementById('room-item-' + roomId).classList.add('active');
+            document.getElementById('room-item-' + id).classList.add('active');
 
             // Cập nhật header
-            document.querySelector('.chat-header-title').textContent = roomName || 'Room ' + roomId;
+            document.querySelector('.chat-header-title').textContent = roomName || 'Room ' + id;
 
             // Show/hide member management button depending on whether this is a group room
             try {
-                var roomElem = document.getElementById('room-item-' + roomId);
+                var roomElem = document.getElementById('room-item-' + id);
                 var memberBtn = document.getElementById('member-btn');
                 var groupToolbar = document.getElementById('group-toolbar');
                 if (roomElem && roomElem.getAttribute('data-is-group') === 'true') {
                     // fetch members to know current user's role
-                    fetch('/get_room_members/' + roomId)
+                    fetch('/get_room_members/' + id)
                         .then(res => res.json())
                         .then(data => {
                             var myRole = 'Member';
@@ -2922,7 +2922,7 @@
             }
 
             // Load message history
-            loadHistory(roomId);
+            loadHistory(id);
         }
 
         function fetchPrivateRoom(id, userName) {
@@ -2939,8 +2939,8 @@
                 });
         }
 
-        function loadHistory(roomId) {
-            fetch('/history/' + roomId, {
+        function loadHistory(id) {
+            fetch('/history/' + id, {
                 method: 'GET'
             })
                 .then(function (response) { return response.json(); })
@@ -3558,8 +3558,8 @@
         });
 
         // Load pinned messages when room changes
-        function loadPinnedMessages(roomId) {
-            fetch('/get_pinned_messages/' + roomId)
+        function loadPinnedMessages(id) {
+            fetch('/get_pinned_messages/' + id)
                 .then(function (response) { return response.json(); })
                 .then(function (data) {
                     updatePinnedMessagesList(data.pinned_messages);
@@ -3571,9 +3571,9 @@
 
         // Update selectRoom to load pinned messages
         var originalSelectRoom = selectRoom;
-        selectRoom = function (roomId, roomName) {
-            originalSelectRoom(roomId, roomName);
-            loadPinnedMessages(roomId);
+        selectRoom = function (id, roomName) {
+            originalSelectRoom(id, roomName);
+            loadPinnedMessages(id);
         };
 
         // Socket event handler for mentions
@@ -3730,7 +3730,7 @@
         });
 
         // Group Avatar functions
-        function uploadGroupAvatar(roomId) {
+        function uploadGroupAvatar(id) {
             var input = document.createElement('input');
             input.type = 'file';
             input.accept = 'image/*';
@@ -3741,7 +3741,7 @@
                 var formData = new FormData();
                 formData.append('avatar', file);
 
-                fetch('/upload_group_avatar/' + roomId, {
+                fetch('/upload_group_avatar/' + id, {
                     method: 'POST',
                     body: formData
                 })
@@ -3749,7 +3749,7 @@
                     .then(function (data) {
                         if (data.success) {
                             // Update the room avatar in the UI
-                            var roomItem = document.querySelector('[data-room-id="' + roomId + '"]');
+                            var roomItem = document.querySelector('[data-room-id="' + id + '"]');
                             var roomAvatar = roomItem.querySelector('.room-avatar');
                             roomAvatar.innerHTML = '<img src="' + data.avatar_url + '" alt="Group Avatar" class="group-avatar-img">';
                             alert('Upload avatar thành công!');
@@ -3768,11 +3768,11 @@
         // Mute notifications functions
         var mutedRooms = [];
 
-        function toggleMuteRoom(roomId) {
-            var muteBtn = document.getElementById('mute-btn-' + roomId);
-            var isMuted = mutedRooms.includes(roomId);
+        function toggleMuteRoom(id) {
+            var muteBtn = document.getElementById('mute-btn-' + id);
+            var isMuted = mutedRooms.includes(id);
 
-            var endpoint = isMuted ? '/unmute_room/' + roomId : '/mute_room/' + roomId;
+            var endpoint = isMuted ? '/unmute_room/' + id : '/mute_room/' + id;
 
             fetch(endpoint, {
                 method: 'POST'
@@ -3781,12 +3781,12 @@
                 .then(function (data) {
                     if (data.success) {
                         if (isMuted) {
-                            mutedRooms = mutedRooms.filter(function (id) { return id !== roomId; });
+                            mutedRooms = mutedRooms.filter(function (id) { return id !== id; });
                             muteBtn.classList.remove('muted');
                             muteBtn.innerHTML = '<i class="fas fa-bell"></i>';
                             muteBtn.title = 'Tắt thông báo';
                         } else {
-                            mutedRooms.push(roomId);
+                            mutedRooms.push(id);
                             muteBtn.classList.add('muted');
                             muteBtn.innerHTML = '<i class="fas fa-bell-slash"></i>';
                             muteBtn.title = 'Bật thông báo';
@@ -3808,8 +3808,8 @@
                     if (data.success) {
                         mutedRooms = data.muted_rooms;
                         // Update UI for muted rooms
-                        mutedRooms.forEach(function (roomId) {
-                            var muteBtn = document.getElementById('mute-btn-' + roomId);
+                        mutedRooms.forEach(function (id) {
+                            var muteBtn = document.getElementById('mute-btn-' + id);
                             if (muteBtn) {
                                 muteBtn.classList.add('muted');
                                 muteBtn.innerHTML = '<i class="fas fa-bell-slash"></i>';
@@ -4362,8 +4362,8 @@
             loadEmailNotificationStatus();
             var msgBox = document.getElementById('messages');
             msgBox.scrollTop = msgBox.scrollHeight;
-            userRooms.forEach(function (roomId) {
-                socket.emit('join', { room: roomId, user: current_user });
+            userRooms.forEach(function (id) {
+                socket.emit('join', { room: id, user: current_user });
             });
             socket.emit('join_user_room');
             try {

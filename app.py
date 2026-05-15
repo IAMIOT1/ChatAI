@@ -945,7 +945,7 @@ def handle_message(data):
         mentioned_user_ids = database.DatabaseManager.parse_mentions(message_text, room)
         if mentioned_user_ids:
             # Get the message ID that was just saved
-            query = "SELECT TOP 1 MessageID FROM Messages WHERE RoomID = ? AND SenderID = ? ORDER BY SentAt DESC"
+            query = "SELECT TOP 1 MessageID FROM Messages WHERE id = ? AND SenderID = ? ORDER BY SentAt DESC"
             message_result = database.DatabaseManager.execute_query(query, (room, current_user_id), fetch_one=True)
             if message_result:
                 message_id = message_result[0]
@@ -1149,7 +1149,7 @@ def handle_edit_message(data):
             return
 
         # Get room_id for notification
-        query = "SELECT RoomID FROM Messages WHERE MessageID = ?"
+        query = "SELECT id FROM Messages WHERE MessageID = ?"
         message = database.DatabaseManager.execute_query(query, (message_id,), fetch_one=True)
         room_id = message[0] if message else None
 
@@ -1187,7 +1187,7 @@ def handle_delete_message(data):
             return
 
         # Get room_id for notification
-        query = "SELECT RoomID FROM Messages WHERE MessageID = ?"
+        query = "SELECT id FROM Messages WHERE MessageID = ?"
         message = database.DatabaseManager.execute_query(query, (message_id,), fetch_one=True)
         room_id = message[0] if message else None
 
@@ -1221,7 +1221,7 @@ def handle_add_reaction(data):
         
         if success:
             # Get room_id for notification
-            query = "SELECT RoomID FROM Messages WHERE MessageID = ?"
+            query = "SELECT id FROM Messages WHERE MessageID = ?"
             message = database.DatabaseManager.execute_query(query, (message_id,), fetch_one=True)
             room_id = message[0] if message else None
 
@@ -1261,7 +1261,7 @@ def handle_remove_reaction(data):
         
         if success:
             # Get room_id for notification
-            query = "SELECT RoomID FROM Messages WHERE MessageID = ?"
+            query = "SELECT id FROM Messages WHERE MessageID = ?"
             message = database.DatabaseManager.execute_query(query, (message_id,), fetch_one=True)
             room_id = message[0] if message else None
 
@@ -1298,7 +1298,7 @@ def handle_pin_message(data):
         
         if success:
             # Get room_id for notification
-            query = "SELECT RoomID FROM Messages WHERE MessageID = ?"
+            query = "SELECT id FROM Messages WHERE MessageID = ?"
             message = database.DatabaseManager.execute_query(query, (message_id,), fetch_one=True)
             room_id = message[0] if message else None
 
@@ -1386,7 +1386,7 @@ def handle_unpin_message(data):
         
         if success:
             # Get room_id for notification
-            query = "SELECT RoomID FROM Messages WHERE MessageID = ?"
+            query = "SELECT id FROM Messages WHERE MessageID = ?"
             message = database.DatabaseManager.execute_query(query, (message_id,), fetch_one=True)
             room_id = message[0] if message else None
 
@@ -1468,7 +1468,7 @@ def get_room_users(room_id):
             SELECT DISTINCT u.id, u.Username, u.FullName
             FROM Users u
             JOIN RoomParticipants rp ON u.id = rp.id
-            WHERE rp.RoomID = ? AND u.Status = 'Online'
+            WHERE rp.id = ? AND u.Status = 'Online'
         """
         users = database.DatabaseManager.execute_query(query, (room_id,), fetch_all=True)
         user_list = [{'user_id': u[0], 'username': u[1], 'full_name': u[2]} for u in users]
@@ -2964,7 +2964,7 @@ def analytics_export():
             elif export_type == 'messages':
                 writer.writerow(['MessageID', 'Content', 'MessageType', 'SentAt', 'SenderName'])
             elif export_type == 'rooms':
-                writer.writerow(['RoomID', 'RoomName', 'IsGroup', 'CreatedAt'])
+                writer.writerow(['id', 'RoomName', 'IsGroup', 'CreatedAt'])
             elif export_type == 'files':
                 writer.writerow(['FileID', 'FileName', 'FileType', 'FileSize', 'UploadedAt', 'UploaderName'])
 

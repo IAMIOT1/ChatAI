@@ -12,7 +12,7 @@ CREATE TABLE IF NOT EXISTS users (
 
 -- 2. BẢNG PHÒNG CHAT (Sửa lại tên cột room_name cho thống nhất)
 CREATE TABLE IF NOT EXISTS rooms (
-    roomid SERIAL PRIMARY KEY,
+    id SERIAL PRIMARY KEY,
     room_name VARCHAR(100) UNIQUE, 
     isgroup BOOLEAN DEFAULT TRUE,
     groupavatar TEXT,
@@ -31,18 +31,18 @@ CREATE TABLE IF NOT EXISTS friendships (
 
 -- 4. BẢNG THÀNH VIÊN PHÒNG (Giữ nguyên)
 CREATE TABLE IF NOT EXISTS roomparticipants (
-    roomid INT NOT NULL,
+    id INT NOT NULL,
     id INT NOT NULL,
     joinedat TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY (roomid, id),
-    CONSTRAINT fk_room FOREIGN KEY (roomid) REFERENCES rooms(roomid) ON DELETE CASCADE,
+    PRIMARY KEY (id, id),
+    CONSTRAINT fk_room FOREIGN KEY (id) REFERENCES rooms(id) ON DELETE CASCADE,
     CONSTRAINT fk_user FOREIGN KEY (id) REFERENCES users(id) ON DELETE CASCADE
 );
 
 -- 5. BẢNG TIN NHẮN (Giữ nguyên)
 CREATE TABLE IF NOT EXISTS messages (
     messageid SERIAL PRIMARY KEY,
-    roomid INT REFERENCES rooms(roomid) ON DELETE CASCADE,
+    id INT REFERENCES rooms(id) ON DELETE CASCADE,
     senderid INT REFERENCES users(id) ON DELETE CASCADE,
     content TEXT,
     sentat TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
