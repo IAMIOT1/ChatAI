@@ -13,7 +13,6 @@ from logger_config import app_logger
 import psycopg2
 import os
 import time
-from database import get_db_connection
 
 
 def init_db():
