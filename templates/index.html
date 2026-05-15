@@ -1870,8 +1870,7 @@
             <div style="display: flex; align-items: center;">
                 <i class="fas fa-search" style="position: absolute; left: 22px; color: #888;"></i>
                 <input type="text" id="search-input" placeholder="Tìm bạn bè, nhóm..."
-                    style="width: 100%; padding: 8px 8px 8px 35px; border-radius: 20px; border: 1px solid #ddd;"
-                    oninput="liveSearch()">
+                    onkeypress="if(event.key === 'Enter') searchUser()">
             </div>
             <!-- Vùng hiển thị kết quả nhanh -->
             <div id="search-results"
