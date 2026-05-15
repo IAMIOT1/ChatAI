@@ -2786,23 +2786,29 @@
                     resDiv.innerHTML = '';
                     if (data.length > 0) {
                         resDiv.style.display = 'block';
+                        // Trong hàm liveSearch, thay đoạn resDiv.innerHTML += ... bằng đoạn này:
                         data.forEach(item => {
-                            // Tạo một phần tử div mới để tránh lỗi chuỗi JSON phức tạp
-                            const div = document.createElement('div');
-                            div.className = 'user-item';
-                            div.style = 'padding:12px; border-bottom:1px solid #eee; cursor:pointer; display:flex; align-items:center;';
-                            div.innerHTML = `
-                                <div style="width:40px; height:40px; background:#0084ff; border-radius:50%; display:flex; align-items:center; justify-content:center; margin-right:12px; color:white;">
-                                    <i class='fas fa-user'></i>
-                                </div>
-                                <div>
-                                    <b style="font-size:14px;">${item.fullname}</b><br>
-                                    <small style="color:#888;">${item.username}</small>
+                            const userDiv = document.createElement('div');
+                            userDiv.className = 'user-item';
+                            userDiv.style = 'padding:12px; border-bottom:1px solid #eee; cursor:pointer;';
+                            
+                            // Sử dụng dấu huyền ` để bọc đoạn này
+                            userDiv.innerHTML = `
+                                <div style="display:flex; align-items:center;">
+                                    <i class="fas fa-user" style="margin-right:10px; color:#0084ff;"></i>
+                                    <div>
+                                        <b>${item.fullname}</b><br>
+                                        <small>${item.username}</small>
+                                    </div>
                                 </div>
                             `;
-                            // Khi click vào thì mới mở Profile
-                            div.onclick = () => openProfileModal(item);
-                            resDiv.appendChild(div);
+
+                            // Đây là chỗ Tới muốn: Ấn vào thì mới hiện Profile
+                            userDiv.onclick = function() {
+                                openProfileModal(item); 
+                            };
+
+                            resDiv.appendChild(userDiv);
                         });
                     } else {
                         resDiv.innerHTML = "<div style='padding:10px; color:#999; text-align:center;'>Không tìm thấy người dùng</div>";
