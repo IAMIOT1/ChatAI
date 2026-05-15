@@ -1716,6 +1716,37 @@
         .btn-action.chat { background-color: #e4e6eb; color: #050505; margin-left: 5px; }
         .btn-action.accept { background-color: #28a745; color: white; }
         .status-pending { font-size: 12px; color: #65676b; font-style: italic; }
+        #profileModal {
+            display: none; 
+            position: fixed; 
+            z-index: 9999; /* Số này phải thật lớn để đè lên trên cùng */
+            left: 0; top: 0; 
+            width: 100%; height: 100%; 
+            background: rgba(0,0,0,0.7); /* Làm nền tối đi để nổi bật Profile */
+            align-items: center; 
+            justify-content: center;
+        }
+
+        .profile-card {
+            background: white; 
+            width: 340px; 
+            padding: 30px; 
+            border-radius: 20px; 
+            text-align: center; 
+            box-shadow: 0 10px 25px rgba(0,0,0,0.2);
+        }
+
+
+
+
+
+
+
+
+
+
+
+
     </style>
 </head>
 
@@ -2755,21 +2786,21 @@
                     if (data.length > 0) {
                         resDiv.style.display = 'block';
                         data.forEach(function (item) {
-                            // Click vào đây sẽ gọi hàm mở Modal Profile
+                            // Chỗ này cực quan trọng: onclick sẽ mở Modal Profile
                             resDiv.innerHTML += `
                                 <div class='user-item' onclick='openProfileModal(${JSON.stringify(item)})' 
-                                    style='padding:12px; border-bottom:1px solid #eee; cursor:pointer; display:flex; align-items:center;'>
+                                    style='padding:12px; border-bottom:1px solid #eee; cursor:pointer; display:flex; align-items:center; transition: 0.2s;'>
                                     <div style="width:40px; height:40px; background:#e1e4e8; border-radius:50%; display:flex; align-items:center; justify-content:center; margin-right:12px;">
                                         <i class='fas fa-user' style="color:#555"></i>
                                     </div>
-                                    <div>
-                                        <b style="font-size:14px;">${item.fullname}</b><br>
-                                        <small style="color:#888;">${item.username}</small>
+                                    <div style="text-align:left;">
+                                        <b style="font-size:14px; color:#333;">${item.fullname}</b><br>
+                                        <small style="color:#888;">SĐT: ${item.username}</small>
                                     </div>
                                 </div>`;
                         });
                     } else {
-                        resDiv.innerHTML = "<div style='padding:10px; color:#999; text-align:center;'>Không tìm thấy người dùng</div>";
+                        resDiv.innerHTML = "<div style='padding:10px; color:#999;'>Không tìm thấy người dùng</div>";
                         resDiv.style.display = 'block';
                     }
                 });
@@ -4443,41 +4474,26 @@
             document.getElementById('p-username').innerText = "Số điện thoại: " + user.username;
             
             var actionsDiv = document.getElementById('p-actions');
-            actionsDiv.innerHTML = ''; // Xóa các nút cũ
+            actionsDiv.innerHTML = ''; 
 
-            // 1. Nếu đã là bạn bè
+            // Logic nút bấm dựa trên friend_status từ app.py trả về
             if (user.friend_status === 'accepted') {
-                actionsDiv.innerHTML = `<button onclick="startPrivateChat(${user.userid})" style="width:100%; padding:12px; background:#0084ff; color:white; border:none; border-radius:10px; cursor:pointer; font-weight:bold;"><i class="fas fa-comment"></i> Nhắn tin ngay</button>`;
-            } 
-            // 2. Nếu đang chờ xác nhận
-            else if (user.friend_status === 'pending') {
+                actionsDiv.innerHTML = `<button class="btn-chat" onclick="selectResult(${user.userid}, 'User', '${user.fullname}')" style="width:100%; padding:12px; background:#0084ff; color:white; border:none; border-radius:10px; cursor:pointer;">Nhắn tin</button>`;
+            } else if (user.friend_status === 'pending') {
                 if (user.is_sender) {
-                    actionsDiv.innerHTML = `<button style="width:100%; padding:12px; background:#e4e6eb; color:#050505; border:none; border-radius:10px;" disabled>Đã gửi lời mời...</button>`;
+                    actionsDiv.innerHTML = `<button style="width:100%; padding:12px; background:#ccc; border:none; border-radius:10px;" disabled>Đã gửi lời mời</button>`;
                 } else {
-                    actionsDiv.innerHTML = `<button onclick="acceptFriend(${user.userid})" style="width:100%; padding:12px; background:#28a745; color:white; border:none; border-radius:10px; cursor:pointer; font-weight:bold;">Chấp nhận kết bạn</button>`;
+                    actionsDiv.innerHTML = `<button onclick="acceptFriend(${user.userid})" style="width:100%; padding:12px; background:#28a745; color:white; border:none; border-radius:10px; cursor:pointer;">Chấp nhận kết bạn</button>`;
                 }
-            } 
-            // 3. Nếu là người lạ
-            else {
-                actionsDiv.innerHTML = `<button onclick="addFriend(${user.userid})" style="width:100%; padding:12px; background:#0084ff; color:white; border:none; border-radius:10px; cursor:pointer; font-weight:bold;"><i class="fas fa-user-plus"></i> Kết bạn</button>`;
-                
-                // Nếu họ bật công khai thì cho nhắn tin lạ luôn
-                if (user.is_public) {
-                    actionsDiv.innerHTML += `<button onclick="startPrivateChat(${user.userid})" style="width:100%; padding:12px; background:#e4e6eb; color:black; border:none; border-radius:10px; cursor:pointer; margin-top:10px;">Nhắn tin (Người lạ)</button>`;
-                }
+            } else {
+                // CHỖ TỚI CẦN: Nút kết bạn chỉ xuất hiện ở đây!
+                actionsDiv.innerHTML = `<button onclick="addFriend(${user.userid})" style="width:100%; padding:12px; background:#0084ff; color:white; border:none; border-radius:10px; cursor:pointer; font-weight:bold;">Kết bạn</button>`;
             }
             
-            document.getElementById('profileModal').style.display = 'block';
+            document.getElementById('profileModal').style.display = 'flex'; // Hiện modal
         }
 
-        function closeProfileModal() {
-            document.getElementById('profileModal').style.display = 'none';
-        }
-
-        // Hàm hỗ trợ chuyển hướng nhắn tin
-        function startPrivateChat(userId) {
-            window.location.href = "/private_room/" + userId;
-        }
+        
     </script>
     <div id="profileModal" style="display:none; position:fixed; z-index:9999; left:0; top:0; width:100%; height:100%; background:rgba(0,0,0,0.6);">
         <div style="background:white; width:340px; margin:15% auto; padding:25px; border-radius:20px; text-align:center; position:relative; box-shadow: 0 10px 25px rgba(0,0,0,0.2);">
