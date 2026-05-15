@@ -205,7 +205,7 @@ class DatabaseManager:
             return None
     @staticmethod
     def get_user_by_username(username):
-        query = "SELECT id, username, password, fullname, email, status FROM users WHERE username = ?"
+        query = "SELECT id, username, password_hash, fullname, email, status FROM users WHERE id = ?"
         return DatabaseManager.execute_query(query, (username,), fetch_one=True)
 
     @staticmethod
