@@ -190,23 +190,24 @@ class DatabaseManager:
         return DatabaseManager.execute_query(query, params)
     @staticmethod
     def get_user_by_phone(phone):
-        """Lấy thông tin người dùng bằng số điện thoại (Chuẩn PostgreSQL)"""
+        """Tìm user theo số điện thoại chuẩn Postgres"""
         try:
-            # Đảm bảo cột phone đã tồn tại (nếu bạn có hàm khởi tạo tự động)
-            # DatabaseManager.ensure_phone_column() 
-
-            # Lưu ý: PostgreSQL phân biệt chữ hoa chữ thường, nên dùng chữ thường cho bảng 'users' và cột 'phone'
-            query = "SELECT id, username, password, fullname, phone, status FROM users WHERE phone = ?"
-            
-            # Hàm execute_query phía trên sẽ tự đổi '?' thành '%s' và 'users' thành lowercase nếu cần
+            # SỬA: Lọc theo phone = ?
+            query = "SELECT id, username, password_hash, fullname, email, status FROM users WHERE phone = ?"
             return DatabaseManager.execute_query(query, (phone,), fetch_one=True)
         except Exception as e:
-            app_logger.error(f"Lỗi khi lấy user theo số điện thoại: {e}")
+            app_logger.error(f"Lỗi hàm get_user_by_phone: {e}")
             return None
     @staticmethod
     def get_user_by_username(username):
-        query = "SELECT id, username, password_hash, fullname, email, status FROM users WHERE id = ?"
-        return DatabaseManager.execute_query(query, (username,), fetch_one=True)
+        """Tìm user theo username chuẩn Postgres"""
+        try:
+            # SỬA: Lọc theo username = ?, dùng cột password_hash và createdat viết liền
+            query = "SELECT id, username, password_hash, fullname, email, status FROM users WHERE username = ?"
+            return DatabaseManager.execute_query(query, (username,), fetch_one=True)
+        except Exception as e:
+            app_logger.error(f"Lỗi hàm get_user_by_username: {e}")
+            return None
 
     @staticmethod
     def save_message(user_id, content, msg_type='Text', room_id=1, reply_to_message_id=None):
@@ -1079,32 +1080,26 @@ class DatabaseManager:
             return False
     
     @staticmethod
-    def register_user(username, fullname, phone, password, verification_token=None, is_verified=False):
-        """Đăng ký người dùng mới (Chuẩn hóa cho Postgres Render)"""
+    def register_user(username, fullname, phone, password, verification_token=None, is_verified=True):
+        """Đăng ký tài khoản mới vào Postgres"""
         try:
+            # Mã hóa mật khẩu bảo mật trước khi lưu vào cột password_hash
             from werkzeug.security import generate_password_hash
             hashed_password = generate_password_hash(password)
             
-            # Đảm bảo cột phone và các cột cần thiết tồn tại
-            DatabaseManager.ensure_phone_column()
-            
-            app_logger.info(f"Đang đăng ký user: {username} - SĐT: {phone}")
-            
-            # SỬA LỖI: Đồng bộ tên cột (dùng gạch dưới)
-            # SỬA LỖI: Postgres dùng TRUE/FALSE trực tiếp cho kiểu BOOLEAN
+            # SỬA: Gọi đúng tên cột password_hash của bảng users
             query = """
-                INSERT INTO users (username, fullname, phone, password_hash, status, is_verified, verification_token, createdat)
-                VALUES (?, ?, ?, ?, 'Offline', ?, ?, CURRENT_TIMESTAMP)
+                INSERT INTO users (username, fullname, phone, password_hash, isverified, status)
+                VALUES (?, ?, ?, ?, ?, 'Offline')
             """
+            # Ép kiểu boolean cho is_verified (Postgres yêu cầu khắt khe kiểu boolean)
+            verified_val = 1 if is_verified else 0
             
-            # Lưu ý: is_verified truyền vào nên là kiểu bool (True/False)
-            params = (username, fullname, phone, hashed_password, is_verified, verification_token)
-            DatabaseManager.execute_query(query, params)
-            
+            DatabaseManager.execute_query(query, (username, fullname, phone, hashed_password, verified_val))
             return True
         except Exception as e:
-            app_logger.error(f"Lỗi đăng ký user {username}: {e}")
-            return False
+            app_logger.error(f"Lỗi hàm register_user: {e}")
+            raise e
     
     @staticmethod
     def ensure_phone_column():
