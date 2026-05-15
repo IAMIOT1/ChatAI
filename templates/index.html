@@ -4470,30 +4470,25 @@
             document.getElementById('profileModal').style.display = 'none';
         }
         function openProfileModal(user) {
+            // Gán dữ liệu "truy cập từ user" vào giao diện Modal
             document.getElementById('p-fullname').innerText = user.fullname;
             document.getElementById('p-username').innerText = "Số điện thoại: " + user.username;
             
-            var actionsDiv = document.getElementById('p-actions');
-            actionsDiv.innerHTML = ''; 
-
-            // Logic nút bấm dựa trên friend_status từ app.py trả về
+            let actionsHtml = '';
             if (user.friend_status === 'accepted') {
-                actionsDiv.innerHTML = `<button class="btn-chat" onclick="selectResult(${user.userid}, 'User', '${user.fullname}')" style="width:100%; padding:12px; background:#0084ff; color:white; border:none; border-radius:10px; cursor:pointer;">Nhắn tin</button>`;
+                actionsHtml = `<button class="btn-chat" onclick="startChat(${user.userid})">Nhắn tin</button>`;
             } else if (user.friend_status === 'pending') {
-                if (user.is_sender) {
-                    actionsDiv.innerHTML = `<button style="width:100%; padding:12px; background:#ccc; border:none; border-radius:10px;" disabled>Đã gửi lời mời</button>`;
-                } else {
-                    actionsDiv.innerHTML = `<button onclick="acceptFriend(${user.userid})" style="width:100%; padding:12px; background:#28a745; color:white; border:none; border-radius:10px; cursor:pointer;">Chấp nhận kết bạn</button>`;
-                }
+                actionsHtml = user.is_sender ? `<span>Đã gửi lời mời</span>` : `<button onclick="acceptFriend(${user.userid})">Chấp nhận kết bạn</button>`;
             } else {
-                // CHỖ TỚI CẦN: Nút kết bạn chỉ xuất hiện ở đây!
-                actionsDiv.innerHTML = `<button onclick="addFriend(${user.userid})" style="width:100%; padding:12px; background:#0084ff; color:white; border:none; border-radius:10px; cursor:pointer; font-weight:bold;">Kết bạn</button>`;
+                // Chưa là bạn bè thì mới hiện nút Kết bạn
+                actionsHtml = `<button onclick="addFriend(${user.userid})" class="btn-add">Kết bạn</button>`;
             }
             
-            document.getElementById('profileModal').style.display = 'flex'; // Hiện modal
+            document.getElementById('p-actions').innerHTML = actionsHtml;
+            document.getElementById('profileModal').style.display = 'flex';
         }
 
-        
+
     </script>
     <div id="profileModal" style="display:none; position:fixed; z-index:9999; left:0; top:0; width:100%; height:100%; background:rgba(0,0,0,0.6);">
         <div style="background:white; width:340px; margin:15% auto; padding:25px; border-radius:20px; text-align:center; position:relative; box-shadow: 0 10px 25px rgba(0,0,0,0.2);">
