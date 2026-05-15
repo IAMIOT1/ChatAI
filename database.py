@@ -354,18 +354,17 @@ class DatabaseManager:
 
     @staticmethod
     def update_user_status(user_id, status):
-        """Cập nhật trạng thái và thời gian hoạt động cuối"""
         try:
-            DatabaseManager.ensure_last_seen_column()
             if status == 'Online':
-                # Sửa id thành id ở cuối câu lệnh
+                # Phải là WHERE id = ? (BỎ userid)
                 query = "UPDATE users SET status = ?, lastseenat = CURRENT_TIMESTAMP WHERE id = ?"
                 return DatabaseManager.execute_query(query, (status, user_id))
             else:
-                # Sửa id thành id ở cuối câu lệnh
+                # Phải là WHERE id = ? (BỎ userid)
                 query = "UPDATE users SET status = ? WHERE id = ?"
                 return DatabaseManager.execute_query(query, (status, user_id))
         except Exception as e:
+            # ...
             app_logger.error(f"Update user status error: {e}")
             return 0
     @staticmethod
