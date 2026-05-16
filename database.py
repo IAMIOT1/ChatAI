@@ -90,9 +90,7 @@ class DatabaseManager:
 
             conn.autocommit = True
 
-            from psycopg2.extras import RealDictCursor
-
-            cursor = conn.cursor(cursor_factory=RealDictCursor)
+            cursor = conn.cursor()
 
             sql_path = os.path.join(
                 os.path.dirname(__file__),
@@ -148,9 +146,7 @@ class DatabaseManager:
                 query = query.replace('?', '%s')
                 query = query.replace('GETDATE()', 'CURRENT_TIMESTAMP')
 
-            from psycopg2.extras import RealDictCursor
-
-            cursor = conn.cursor(cursor_factory=RealDictCursor)
+            cursor = conn.cursor()
 
             if params:
                 cursor.execute(query, params)
@@ -363,9 +359,7 @@ class DatabaseManager:
 
         try:
             conn = DatabaseManager.get_db_connection()
-            from psycopg2.extras import RealDictCursor
-
-            cursor = conn.cursor(cursor_factory=RealDictCursor)
+            cursor = conn.cursor()
 
             # PostgreSQL dùng %s
             # SQL Server dùng ?
