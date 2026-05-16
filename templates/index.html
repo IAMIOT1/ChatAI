@@ -4543,67 +4543,86 @@
             fetch('/api/get_rooms')
                 .then(response => response.json())
                 .then(rooms => {
-                    const privateChatList = document.getElementById('private-chat-list');
-                    const groupChatList = document.getElementById('group-chat-list');
+                    // SỬA TẠI ĐÂY: Sử dụng ID danh sách phòng tổng của giao diện Zalo
+                    // (Đề phòng Tới đặt tên là room-list hoặc chat-list)
+                    const roomList = document.getElementById('room-list') || document.getElementById('chat-list') || document.getElementById('private-chat-list');
                     
-                    // Xóa sạch trạng thái "Chưa có chat riêng/nhóm" cũ
-                    if(privateChatList) privateChatList.innerHTML = '';
-                    if(groupChatList) groupChatList.innerHTML = '';
+                    if (!roomList) {
+                        console.error("Không tìm thấy thẻ HTML chứa danh sách phòng chat (room-list)!");
+                        return;
+                    }
+                    
+                    // Xóa sạch chữ "Chưa có phòng chat" cũ
+                    roomList.innerHTML = '';
 
                     if (!rooms || rooms.length === 0) {
-                        if(privateChatList) privateChatList.innerHTML = '<li class="text-muted text-center p-2">Chưa có chat riêng</li>';
-                        if(groupChatList) groupChatList.innerHTML = '<li class="text-muted text-center p-2">Chưa có nhóm nào</li>';
+                        roomList.innerHTML = '<div class="text-muted text-center p-3" style="font-size: 14px;">Chưa có cuộc hội thoại nào</div>';
                         return;
                     }
 
                     rooms.forEach(room => {
                         const li = document.createElement('li');
-                        li.className = 'list-group-item list-group-item-action d-flex align-items-center room-item';
+                        // Gán class chuẩn đẹp theo giao diện Zalo Clone của Tới
+                        li.className = 'room-item d-flex align-items-center p-3 border-bottom';
+                        li.style.cursor = 'pointer';
                         li.dataset.roomId = room.id;
                         
-                        // Chuẩn hóa kiểm tra loại phòng tương thích với Postgres của Tới
+                        // Kiểm tra loại phòng (Nhóm hay Cá nhân) tương thích với Postgres
                         const isGroupRoom = room.isgroup === true || room.isgroup === 1 || room.room_type === 'group' || room.room_type === 'channel';
                         const roomName = room.room_name || room.name || `Phòng chat #${room.id}`;
+                        
+                        // Xác định icon đại diện (Nhóm dùng icon nhiều người, cá nhân dùng 1 người)
+                        const avatarIcon = isGroupRoom ? 'fa-users' : 'fa-user';
+                        const avatarBg = isGroupRoom ? '#e1f5fe' : '#e8eaf6';
+                        const avatarColor = isGroupRoom ? '#03a9f4' : '#3f51b5';
 
                         li.innerHTML = `
-                            <div class="avatar-circle me-2" style="width: 40px; height: 40px; background: #e9ecef; border-radius: 50%; display: flex; align-items: center; justify-content: center;">
-                                ${isGroupRoom ? '👥' : '👤'}
+                            <div class="room-avatar me-3" style="width: 48px; height: 48px; background: ${avatarBg}; color: ${avatarColor}; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 20px; flex-shrink: 0;">
+                                <i class="fas ${avatarIcon}"></i>
                             </div>
-                            <div class="flex-grow-1 text-truncate">
-                                <strong class="room-name">${roomName}</strong>
-                                <div class="small text-muted text-truncate">Bấm để vào chat...</div>
+                            <div class="room-body flex-grow-1 text-truncate" style="text-align: left;">
+                                <div class="d-flex justify-content-between align-items-center">
+                                    <span class="room-name fw-bold text-dark" style="font-size: 15px;">${roomName}</span>
+                                    <span class="badge bg-danger rounded-pill" id="room-badge-${room.id}" style="display: none; font-size: 10px;">0</span>
+                                </div>
+                                <div class="small text-muted text-truncate mt-1" style="font-size: 13px;">Bấm để vào nhắn tin...</div>
                             </div>
                         `;
 
-                        // Bấm vào phòng nào thì gọi hàm loadRoomHistory của Tới để nạp tin nhắn phòng đó
+                        // Sự kiện click để load lịch sử tin nhắn khi chọn phòng
                         li.addEventListener('click', () => {
-                            document.querySelectorAll('.room-item').forEach(el => el.classList.remove('active'));
-                            li.classList.add('active');
+                            // Xóa class active của các phòng khác
+                            document.querySelectorAll('.room-item').forEach(el => el.classList.remove('active', 'bg-light'));
+                            // Thêm trạng thái chọn cho phòng hiện tại
+                            li.classList.add('active', 'bg-light');
                             
-                            // Gọi hàm lấy lịch sử tin nhắn của Tới
+                            // Gọi hàm nạp lịch sử tin nhắn xịn của Tới
                             if (typeof loadRoomHistory === 'function') {
                                 loadRoomHistory(room.id);
                             }
                             
-                            // Cập nhật tên phòng chat hiện tại lên đỉnh khung chat nếu có hàm tương ứng
-                            const currentRoomNameEl = document.getElementById('current-room-name');
-                            if (currentRoomNameEl) currentRoomNameEl.innerText = roomName;
+                            // Đổi tên phòng trên đỉnh khung chat
+                            const currentRoomNameTitle = document.getElementById('current-room-name') || document.getElementById('chat-title');
+                            if (currentRoomNameTitle) {
+                                currentRoomNameTitle.innerText = roomName;
+                            }
                         });
 
-                        // Đổ vào đúng danh mục hiển thị trên giao diện bên trái
-                        if (isGroupRoom) {
-                            if(groupChatList) groupChatList.appendChild(li);
-                        } else {
-                            if(privateChatList) privateChatList.appendChild(li);
-                        }
+                        // Đổ trực tiếp vào danh sách phòng tổng
+                        roomList.appendChild(li);
                     });
+
+                    // Gọi đếm tin nhắn chưa đọc để đồng bộ badge
+                    if (typeof updateUnreadCounts === 'function') {
+                        updateUnreadCounts();
+                    }
                 })
                 .catch(error => {
-                    console.error('Lỗi khi tải danh sách phòng chat:', error);
+                    console.error('Lỗi khi fetch danh sách phòng chat:', error);
                 });
         }
 
-        // Tự động gọi hàm loadRooms ngay khi vừa đăng nhập/tải xong trang web
+        // Gọi chạy hàm ngay khi load trang
         document.addEventListener('DOMContentLoaded', function() {
             loadRooms();
         });
