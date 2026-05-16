@@ -1952,11 +1952,19 @@
             {% if friends %}
             {% for friend in friends %}
             {% if friend.id not in private_user_ids %}
-            <div class="user-item" data-user-id="{{ friend.id }}" data-user-name="{{ friend.FullName }}"
+            <div class="user-item"
+                data-user-id="{{ friend.id }}"
+                data-user-name="{{ friend.fullname }}"
                 onclick="fetchPrivateRoomFromData(this)">
+
                 <i class="fas fa-user-circle"></i>
-                <span>{{ friend.FullName }} <span
-                        class="status-dot {{ 'online' if friend.Status == 'Online' else 'offline' }}"></span></span>
+
+                <span>
+                    {{ friend.fullname }}
+
+                    <span class="status-dot {{ 'online' if friend.status == 'Online' else 'offline' }}">
+                    </span>
+                </span>
             </div>
             {% endif %}
             {% endfor %}
@@ -2805,7 +2813,7 @@
                 return;
             }
 
-            fetch('/search?q=' + encodeURIComponent(q))
+            fetch('/api/search_friend?username=' + encodeURIComponent(q))
                 .then(response => response.json())
                 .then(data => {
                     resDiv.innerHTML = '';
@@ -2830,7 +2838,7 @@
 
                             // Đây là chỗ Tới muốn: Ấn vào thì mới hiện Profile
                             userDiv.onclick = function() {
-                                openProfileModal(item); 
+                                showProfileModal(item); 
                             };
 
                             resDiv.appendChild(userDiv);
