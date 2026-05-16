@@ -2725,15 +2725,41 @@
         }
 
         function loadRoomHistory(id) {
+            current_room = id; // Cập nhật lại phòng hiện tại để hàm appendMessage nhận đúng data-room-id
+            
             fetch('/history/' + id)
                 .then(function (response) { return response.json(); })
                 .then(function (messages) {
                     var messagesContainer = document.getElementById('messages');
                     messagesContainer.innerHTML = '';
+                    
                     messages.forEach(function (msg) {
-                        appendMessage({ user: msg.sender, content: msg.content, type: msg.type, is_read: msg.is_read, sent_at: msg.sent_at });
+                        // Đổ đầy đủ các trường dữ liệu mà hàm appendMessage của Tới cần
+                        appendMessage({ 
+                            message_id: msg.id || msg.message_id, 
+                            user: msg.sender || msg.username, 
+                            content: msg.content || msg.msg,
+                            msg: msg.content || msg.msg,
+                            type: msg.type || 'Text',
+                            image_data: msg.image_data || msg.file_url, // Đề phòng lưu link ảnh
+                            file_url: msg.file_url,
+                            filename: msg.filename || msg.file_name,
+                            is_read: msg.is_read || msg.isread, 
+                            sent_at: msg.sent_at || msg.created_at,
+                            reactions: msg.reactions || {}, // Các emoji nếu có
+                            reply_to_message_id: msg.reply_to_message_id,
+                            reply_to_sender_name: msg.reply_to_sender_name,
+                            reply_to_content: msg.reply_to_content
+                        });
                     });
-                    markRead(id);
+                    
+                    // Đánh dấu đã đọc tin nhắn trong phòng
+                    if (typeof markRead === 'function') {
+                        markRead(id);
+                    }
+                })
+                .catch(function(err) {
+                    console.error("Lỗi khi tải lịch sử phòng chat:", err);
                 });
         }
 
@@ -4513,6 +4539,110 @@
                     console.log(data);
                 });
         }
+        function loadRooms() {
+            fetch('/api/get_rooms')
+                .then(response => response.json())
+                .then(rooms => {
+                    const privateChatList = document.getElementById('private-chat-list');
+                    const groupChatList = document.getElementById('group-chat-list');
+                    
+                    // Xóa sạch trạng thái "Chưa có chat riêng/nhóm" cũ
+                    if(privateChatList) privateChatList.innerHTML = '';
+                    if(groupChatList) groupChatList.innerHTML = '';
+
+                    if (!rooms || rooms.length === 0) {
+                        if(privateChatList) privateChatList.innerHTML = '<li class="text-muted text-center p-2">Chưa có chat riêng</li>';
+                        if(groupChatList) groupChatList.innerHTML = '<li class="text-muted text-center p-2">Chưa có nhóm nào</li>';
+                        return;
+                    }
+
+                    rooms.forEach(room => {
+                        const li = document.createElement('li');
+                        li.className = 'list-group-item list-group-item-action d-flex align-items-center room-item';
+                        li.dataset.roomId = room.id;
+                        
+                        // Chuẩn hóa kiểm tra loại phòng tương thích với Postgres của Tới
+                        const isGroupRoom = room.isgroup === true || room.isgroup === 1 || room.room_type === 'group' || room.room_type === 'channel';
+                        const roomName = room.room_name || room.name || `Phòng chat #${room.id}`;
+
+                        li.innerHTML = `
+                            <div class="avatar-circle me-2" style="width: 40px; height: 40px; background: #e9ecef; border-radius: 50%; display: flex; align-items: center; justify-content: center;">
+                                ${isGroupRoom ? '👥' : '👤'}
+                            </div>
+                            <div class="flex-grow-1 text-truncate">
+                                <strong class="room-name">${roomName}</strong>
+                                <div class="small text-muted text-truncate">Bấm để vào chat...</div>
+                            </div>
+                        `;
+
+                        // Bấm vào phòng nào thì gọi hàm loadRoomHistory của Tới để nạp tin nhắn phòng đó
+                        li.addEventListener('click', () => {
+                            document.querySelectorAll('.room-item').forEach(el => el.classList.remove('active'));
+                            li.classList.add('active');
+                            
+                            // Gọi hàm lấy lịch sử tin nhắn của Tới
+                            if (typeof loadRoomHistory === 'function') {
+                                loadRoomHistory(room.id);
+                            }
+                            
+                            // Cập nhật tên phòng chat hiện tại lên đỉnh khung chat nếu có hàm tương ứng
+                            const currentRoomNameEl = document.getElementById('current-room-name');
+                            if (currentRoomNameEl) currentRoomNameEl.innerText = roomName;
+                        });
+
+                        // Đổ vào đúng danh mục hiển thị trên giao diện bên trái
+                        if (isGroupRoom) {
+                            if(groupChatList) groupChatList.appendChild(li);
+                        } else {
+                            if(privateChatList) privateChatList.appendChild(li);
+                        }
+                    });
+                })
+                .catch(error => {
+                    console.error('Lỗi khi tải danh sách phòng chat:', error);
+                });
+        }
+
+        // Tự động gọi hàm loadRooms ngay khi vừa đăng nhập/tải xong trang web
+        document.addEventListener('DOMContentLoaded', function() {
+            loadRooms();
+        });
+        // Biến lưu id phòng đang chọn hiện tại
+        let currentRoomId = null; 
+
+        function sendMessage() {
+            var input = document.getElementById('message-input');
+            var content = input.value.trim();
+            
+            if (!content || !currentRoomId) return;
+
+            // Nếu Tới dùng Socket.IO để chat Realtime:
+            if (typeof socket !== 'undefined' && socket.connected) {
+                socket.emit('send_message', {
+                    room_id: currentRoomId,
+                    content: content
+                });
+            } else {
+                // Nếu dùng API thuần làm phương án dự phòng:
+                fetch('/api/send_message', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ room_id: currentRoomId, content: content })
+                });
+            }
+
+            input.value = ''; // Gửi xong xóa trống ô nhập liệu
+        }
+
+        // Bắt sự kiện bấm nút Gửi
+        document.getElementById('send-btn')?.addEventListener('click', sendMessage);
+
+        // Bắt sự kiện nhấn phím Enter trong ô chat
+        document.getElementById('message-input')?.addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') {
+                sendMessage();
+            }
+        });
 
 
     </script>
